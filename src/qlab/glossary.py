@@ -64,7 +64,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "permutation": {
         "term": "Permutation test",
         "short": "Re-runs the strategy on shuffled data with the same returns but no patterns.",
-        "long": "If the real result isn't clearly better than the shuffled ones, the strategy is finding noise.",
+        "long": "If the real result isn't clearly better than the shuffled ones, the strategy is "
+        "finding noise.",
     },
     "bootstrap": {
         "term": "Bootstrap Monte Carlo",
@@ -84,7 +85,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "lockbox": {
         "term": "Lockbox",
         "short": "The most recent data, kept untouched and used once at the very end.",
-        "long": "Once opened for a strategy family it's burned; reusing it turns it into ordinary in-sample data.",
+        "long": "Once opened for a strategy family it's burned; reusing it turns it into ordinary "
+        "in-sample data.",
     },
     "lookahead": {
         "term": "Look-ahead bias",

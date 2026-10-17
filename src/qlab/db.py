@@ -1,7 +1,8 @@
-"""DuckDB access. One file holds the ledger, audit log, data catalog and gauntlet results.
+"""DuckDB access for the ledger, audit log, data catalog and gauntlet results.
 
-Connections are short-lived: open, do the work, close. DuckDB allows one writing process at a time, so if
-another process (for example the API server) holds the lock we retry briefly before giving up.
+Connections are short-lived: open, do the work, close. DuckDB lets one process write at a time, so when
+another process (usually the API server) holds the lock, ``connect`` retries for about ten seconds before
+giving up with a clear message.
 """
 
 from __future__ import annotations
@@ -104,12 +105,25 @@ SCHEMA = [
 
 
 def _init(con: duckdb.DuckDBPyConnection) -> None:
+    """Create any missing tables. Safe to run on every connection.
+
+    Args:
+        con: Open read-write connection.
+    """
     for stmt in SCHEMA:
         con.execute(stmt)
 
 
 @contextlib.contextmanager
 def connect() -> Iterator[duckdb.DuckDBPyConnection]:
+    """Open the lab database, make sure the schema exists, and close it afterwards.
+
+    Returns:
+        A context manager yielding a read-write DuckDB connection.
+
+    Raises:
+        RuntimeError: Another process kept the write lock for more than ~10 seconds.
+    """
     config.ensure_dirs()
     last_err: Exception | None = None
     con = None
@@ -117,13 +131,13 @@ def connect() -> Iterator[duckdb.DuckDBPyConnection]:
         try:
             con = duckdb.connect(str(config.db_path()))
             break
-        except duckdb.IOException as err:  # another process holds the write lock
+        except duckdb.IOException as err:
             last_err = err
             time.sleep(0.25)
     if con is None:
         raise RuntimeError(
-            f"Could not open {config.db_path()} (locked by another process?). "
-            "Stop the other lab process or run the action through the API."
+            f"Could not open {config.db_path()}: another lab process holds the lock. "
+            "Stop it, or run the action through the API."
         ) from last_err
     try:
         _init(con)
@@ -133,7 +147,15 @@ def connect() -> Iterator[duckdb.DuckDBPyConnection]:
 
 
 def rows(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
-    """Run a query and return a list of dicts (JSON-friendly)."""
+    """Run a query and return its rows as JSON-friendly dicts.
+
+    Args:
+        sql: SQL with ``?`` placeholders.
+        params: Values for the placeholders.
+
+    Returns:
+        One dict per row. Dates and timestamps are ISO-8601 strings.
+    """
     with connect() as con:
         cur = con.execute(sql, params or [])
         cols = [d[0] for d in cur.description]
@@ -141,18 +163,33 @@ def rows(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
         for rec in cur.fetchall():
             item = {}
             for k, v in zip(cols, rec, strict=True):
-                if hasattr(v, "isoformat"):
-                    v = v.isoformat()
-                item[k] = v
+                item[k] = v.isoformat() if hasattr(v, "isoformat") else v
             out.append(item)
         return out
 
 
 def scalar(sql: str, params: list[Any] | None = None) -> Any:
+    """Run a query and return the first column of the first row.
+
+    Args:
+        sql: SQL with ``?`` placeholders.
+        params: Values for the placeholders.
+
+    Returns:
+        The value, or None when the query returns no rows.
+    """
     with connect() as con:
         res = con.execute(sql, params or []).fetchone()
         return res[0] if res else None
 
 
 def dumps(obj: Any) -> str:
+    """Serialise a value to JSON for storage in a VARCHAR column.
+
+    Args:
+        obj: Any JSON-like value. Non-JSON types (dates, numpy scalars) are converted with ``str``.
+
+    Returns:
+        A JSON string with sorted keys, so equal inputs give equal strings.
+    """
     return json.dumps(obj, default=str, sort_keys=True)

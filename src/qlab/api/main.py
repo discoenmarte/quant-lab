@@ -8,9 +8,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__, config
-from . import routes_core, routes_data
+from . import routes_backtest, routes_core, routes_data
 
-ROUTERS = [routes_core.router, routes_data.router]
+ROUTERS = [routes_core.router, routes_data.router, routes_backtest.router]
 
 
 def create_app() -> FastAPI:

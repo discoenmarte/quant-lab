@@ -1,0 +1,157 @@
+# Handoff
+
+How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
+`docs/STYLE.md`.
+
+- **Last updated:** 2026-10-17, after M0
+- **Repository:** https://github.com/discoenmarte/quant-lab (public)
+- **Owner:** discoenmarte, a computer scientist learning quant research
+
+## 1. Working agreements (follow these exactly)
+
+1. **Author is discoenmarte only.** Never add `Co-Authored-By` trailers or "Generated with ..." lines to
+   commits, pull requests, docs or code. The repo-local git identity is already set
+   (`discoenmarte <165704074+discoenmarte@users.noreply.github.com>`).
+2. **One feature per commit**, Conventional Commits (`feat(data): ...`, `test(gauntlet): ...`), pushed
+   **directly to `main`**. Tag each finished milestone (`m0`, `m1`, ...) and push the tag.
+3. **Docstrings** follow `docs/STYLE.md`: every module, class and function has a signature block (summary,
+   Args, Returns, Raises). Plain, precise, concrete. TypeScript exports get JSDoc in the same shape.
+4. **Be critical.** The owner explicitly wants pushback on ideas that don't hold up, with evidence.
+5. **Research rules:** every backtest goes through the ledger; signals use only data available at decision
+   time; nothing places real-money orders.
+6. Keep `README.md` (milestone table) and this file up to date at the end of each milestone.
+
+## 2. Machine and tools
+
+| Item | Value |
+|---|---|
+| Machine | Apple M5 Pro, 15 cores (5 performance + 10 efficiency), 48 GB RAM, macOS |
+| Python | uv 0.13.1 manages Python 3.12 and `.venv` (`uv sync --group dev`) |
+| Web | Node 26.12, npm 11; Vite 8, React 19, TypeScript 7, ECharts 6, Lightweight Charts 5 |
+| GitHub | `gh` CLI logged in as `discoenmarte`; remote uses SSH (`git@github.com:discoenmarte/quant-lab.git`) |
+| Local LLMs | Ollama with `qwen3.6:35b` (22 GB, default for M4), `gpt-oss:20b`, `qwen2.5:14b`, `llama3.2:3b`. Start with `ollama serve`. |
+| Claude Code CLI | `~/.local/bin/claude`; usable headless (`claude -p ... --output-format json`) as an optional LLM provider |
+| Paid services | None besides the owner's Claude subscription. Everything else must stay free. |
+
+## 3. Repository map
+
+```
+src/qlab/config.py        paths (QLAB_DATA overrides the data folder; tests use it)
+src/qlab/db.py            DuckDB connection + schema (trials, audit, sources, series, quality_issues,
+                          gauntlet_cards, thresholds, lockbox_uses)
+src/qlab/ledger.py        record_trial / count_trials / sharpes / list_trials / questions
+src/qlab/audit.py         log / recent
+src/qlab/timeutil.py      UTC helpers and clocks
+src/qlab/glossary.py      plain-language definitions used by UI tooltips
+src/qlab/backtest/metrics.py   Sharpe, Sortino, CAGR, drawdowns, Calmar, exposure, turnover, monthly returns
+src/qlab/api/main.py      FastAPI app; serves web/dist at /
+src/qlab/api/routes_core.py    /api/health, /system, /overview, /audit, /glossary, POST /demo
+src/qlab/cli.py           qlab serve | init | demo
+tests/                    pytest; conftest gives each test its own QLAB_DATA folder
+web/src/App.tsx           shell: sidebar (nav.ts), top bar, routes, command palette
+web/src/nav.ts            every page, its milestone and whether it's built (flip `ready` when done)
+web/src/pages/            Home, System, Audit, Glossary, Placeholder
+web/src/components/       Card, Stat, Badge, InfoTip, DataTable, EChart, Icon, Clocks, Toast, CommandPalette
+.github/workflows/ci.yml  ruff + pytest, and web type-check + build, on every push
+docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack
+```
+
+Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help` lists everything.
+
+## 4. Status
+
+| | Milestone | State |
+|---|---|---|
+| M0 | Foundations | **Done.** Ledger, audit, metrics, Lab API, CLI, web shell with 4 pages, CI green. |
+| M1 | Data lake | **Next.** Spec below. |
+| M2 | Backtest engine | Spec below. |
+| M3 | Validation gauntlet | Spec below. |
+| M4 | Research inbox | Spec below. |
+| M5 | Strategy mining | Spec below. |
+| M6–M9 | Registry, paper trading, go-live gate, intraday | See ROADMAP §6, §6b and §7. |
+
+## 5. Specs for the next milestones
+
+### M1: data lake
+
+Free sources (all reachable from the owner's network on 2026-10-17):
+
+| Source | What | URL pattern | Notes |
+|---|---|---|---|
+| Binance public data | BTCUSDT, ETHUSDT klines, 1d and 1h | `https://data.binance.vision/data/spot/monthly/klines/<SYM>/<INT>/<SYM>-<INT>-<YYYY-MM>.zip` (+ `.CHECKSUM`) | Columns: open_time, open, high, low, close, volume, close_time, ... **Spot timestamps are microseconds from 2025-01-01, milliseconds before**: detect by magnitude. Current month only in `daily/` files. |
+| Stooq | Daily OHLCV for US ETFs | `https://stooq.com/q/d/l/?s=spy.us&i=d` | CSV `Date,Open,High,Low,Close,Volume`. Check whether prices are adjusted. |
+| Yahoo chart API | Raw close and adjusted close | `https://query1.finance.yahoo.com/v8/finance/chart/SPY?period1=..&period2=..&interval=1d&events=div,split` | Unofficial; use for raw-vs-adjusted and split/dividend markers. |
+| Ken French | Daily factors including RF | `.../ken.french/ftp/F-F_Research_Data_Factors_daily_CSV.zip` | Percent units; header lines to skip. RF is the cash rate for backtests. |
+| FRED | Macro | `fredgraph.csv?id=...` | **Timed out** from this network; optional. |
+
+Universe: ETFs `SPY QQQ IWM EFA EEM TLT IEF GLD DBC VNQ HYG LQD XLK XLF XLE XLV XLY XLP XLI XLU XLB`; crypto
+`BTCUSDT ETHUSDT`.
+
+Build `qlab/data/` with `sources/<name>.py` (download → parse to the bar contract), `store.py` (Parquet write,
+`series` catalog upsert, data hash), `quality.py` (duplicates, non-positive prices, OHLC consistency, extreme
+returns, stale closes, gaps against the weekday calendar), `ingest.py` (orchestrates a source, updates
+`sources`, writes `quality_issues`, logs audit). API: `GET /api/data/sources|series|coverage|issues`,
+`GET /api/data/bars`, `POST /api/data/ingest`. CLI: `qlab ingest [--source X]`. Web: Data Health page with
+a freshness board, coverage heatmap, candle inspector (Lightweight Charts) and an issues table. Tests use
+small fixtures (no network).
+
+Exit: a full rebuild from scratch works, and quality checks run on every ingest.
+
+### M2: backtest engine and Backtest Studio
+
+- Strategy contract: `positions = strategy(bars, **params)`, values in [-1, 1], using data up to each bar.
+- Engine: position decided at bar t is held from the **open of t+1**. Day return = `p_old × gap + p_new ×
+  intraday − costs`. Costs per unit of position change: commission + half-spread + slippage (bps). Idle cash
+  earns RF (Ken French).
+- Library: buy-and-hold, trend SMA (the 200-day rule with entry/exit bands), SMA crossover, time-series
+  momentum, Donchian breakout, RSI reversion.
+- Every run records a ledger trial. Report JSON: stats, equity vs benchmark, drawdown, monthly returns, cost
+  breakdown, trades.
+- Leakage test: perturb data after a cut-off and assert positions before it don't change.
+- Benchmark script for decision 0001: time a backtest on daily and on minute bars.
+- Web: Backtest Studio (form, stats banner with N, synced charts, monthly heatmap, cost waterfall, trades,
+  candles with trade markers).
+
+### M3: validation gauntlet
+
+Stages in order (see ROADMAP §3): leakage, costs, walk-forward / out-of-sample, plateau (≥ 0.6), permutation
+(p ≤ 0.01), stationary bootstrap (risk), Deflated Sharpe (≥ 0.95, N from the ledger) and PBO via CSCV
+(≤ 0.2), regimes, diversification, lockbox (last 2 years, once per family).
+
+Deflated Sharpe (Bailey & López de Prado, 2014), with per-period Sharpe `SR`, `T` observations, skew `g3`,
+raw kurtosis `g4`, and `V` the variance of trial Sharpe ratios:
+`SR0 = sqrt(V) × ((1 − γ) Φ⁻¹(1 − 1/N) + γ Φ⁻¹(1 − 1/(N e)))`, γ ≈ 0.5772;
+`DSR = Φ((SR − SR0) √(T − 1) / √(1 − g3·SR + (g4 − 1)/4 · SR²))`.
+
+Calibration: pure-noise strategies give the false-positive rate (target ≤ 5%); planted regime-switching
+drifts give detection power versus data length. Web: Gauntlet Console and Ledger page.
+
+### M4: research inbox
+
+arXiv API (`cat:q-fin.TR OR q-fin.PM OR q-fin.ST OR q-fin.CP`, sorted by submission date) → triage with the
+two-minute rubric (ROADMAP §12) via Ollama `qwen3.6:35b` in JSON mode → `StrategySpec` → human review queue →
+code from templates → replication → post-publication test → gauntlet. Provider interface so the Claude CLI
+can be swapped in.
+
+### M5: strategy mining
+
+Grammar of signals × filters × exits × sizing; random/Bayesian search (add `optuna`), genetic programming for
+formulas; budgets per research question; every candidate is a ledger trial. Exit: noise calibration still
+holds at mining scale.
+
+## 6. Known gotchas
+
+- The desktop app's preview tool may look for `.claude/launch.json` in an old folder. A config that works:
+  `uv run --project <repo> qlab serve --port 8765`. `.claude/` is gitignored.
+- DuckDB allows one writing process. Stop `qlab serve` before long CLI jobs, or trigger them through the API.
+- `ROADMAP.md` was written before implementation; where it differs from decisions 0001-0003, the decisions win
+  (no MLflow, no Dagster yet, Vite instead of Next.js).
+
+## 7. References
+
+- `ROADMAP.md` §1 critique, §2 prior art, §3 architecture and gauntlet, §5 data sources, §6 and §6b milestones
+  and screens, §8 budget, §12 reading list.
+- `docs/decisions/` for every architecture decision.
+- Key papers: Bailey & López de Prado (2014) Deflated Sharpe; Bailey et al. (2017) PBO; Harvey, Liu & Zhu
+  (2016); White (2000); Arnott, Harvey & Markowitz (2019) backtesting protocol; Vidovich & Zerjal (2026) six
+  backtest-vs-live defects; Zheng (2026) admission gates; Wang & Ventre (2026) FactorBench.

@@ -33,7 +33,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
         label: 'Data Health',
         icon: 'data',
         milestone: 'M1',
-        ready: false,
+        ready: true,
         blurb: 'Every source, how fresh it is, and what looks wrong.',
         planned: [
           'Freshness board per source',

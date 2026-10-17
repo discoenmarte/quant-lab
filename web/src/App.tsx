@@ -9,6 +9,7 @@ import { GlossaryProvider } from './glossary';
 import { useApi } from './hooks';
 import { NAV, NAV_ITEMS } from './nav';
 import { Audit } from './pages/Audit';
+import { DataHealth } from './pages/DataHealth';
 import { Glossary } from './pages/Glossary';
 import { Home } from './pages/Home';
 import { Placeholder } from './pages/Placeholder';
@@ -17,6 +18,7 @@ import { System } from './pages/System';
 /** Built pages by route. Routes without an entry render their milestone placeholder. */
 const PAGES: Record<string, ReactElement> = {
   '/': <Home />,
+  '/data': <DataHealth />,
   '/system': <System />,
   '/audit': <Audit />,
   '/glossary': <Glossary />,

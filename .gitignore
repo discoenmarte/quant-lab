@@ -25,3 +25,6 @@ tmp*/
 # Secrets
 .env
 *.key
+
+# Local tooling
+.claude/

@@ -22,7 +22,11 @@ dependencies = [
 orchestration = ["dagster>=1.8", "dagster-webserver>=1.8"]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = [
+    "httpx2>=2.13.1",
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [project.scripts]
 qlab = "qlab.cli:app"

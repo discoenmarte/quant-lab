@@ -38,6 +38,27 @@ def init() -> None:
 
 
 @app.command()
+def ingest(
+    source: str = typer.Option("all", help="binance, yahoo, french, or all"),
+    symbols: str = typer.Option("", help="Comma-separated symbols; empty means the default universe"),
+) -> None:
+    """Download free data, store it as Parquet and run the quality checks.
+
+    Args:
+        source: Which source to ingest.
+        symbols: Optional symbol filter.
+    """
+    from .data.ingest import SOURCES
+    from .data.ingest import ingest as run
+
+    names = list(SOURCES) if source == "all" else [source]
+    wanted = [s.strip() for s in symbols.split(",") if s.strip()] or None
+    for name in names:
+        res = run(name, wanted, log=typer.echo, actor="cli")
+        typer.echo(f"== {name}: {res['status']} ({len(res['series'])} series, {len(res['errors'])} errors)")
+
+
+@app.command()
 def demo() -> None:
     """Run the demo pipeline once and print the result as JSON."""
     from .api.routes_core import run_demo

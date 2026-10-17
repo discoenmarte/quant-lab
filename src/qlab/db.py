@@ -104,13 +104,20 @@ SCHEMA = [
 ]
 
 
+MIGRATIONS = [
+    # M1: series carry their kind (bars or factors) and a content hash.
+    "ALTER TABLE series ADD COLUMN IF NOT EXISTS kind VARCHAR",
+    "ALTER TABLE series ADD COLUMN IF NOT EXISTS data_hash VARCHAR",
+]
+
+
 def _init(con: duckdb.DuckDBPyConnection) -> None:
-    """Create any missing tables. Safe to run on every connection.
+    """Create missing tables and apply additive migrations. Safe to run on every connection.
 
     Args:
         con: Open read-write connection.
     """
-    for stmt in SCHEMA:
+    for stmt in SCHEMA + MIGRATIONS:
         con.execute(stmt)
 
 

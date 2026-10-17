@@ -28,6 +28,19 @@ heavy lifting already runs in compiled code (NumPy, DuckDB, Arrow), as long as o
 - Path-dependent backtests on minute bars (stops, targets, trailing exits) in M9.
 - Evaluation of mined formula alphas over many symbols in M5.
 
+## Measurement (2026-10-17, M2)
+
+`qlab bench`, median of 10 runs on an Apple M5 Pro, computing positions (trend rule with its Python state
+machine) plus the engine:
+
+| Case | Bars | Per backtest | Throughput on 15 cores (upper bound) |
+|---|---|---|---|
+| SPY daily | 8,487 | 2.7 ms | ~5,600 per second |
+| BTCUSDT hourly | 80,221 | 17.2 ms | ~870 per second |
+
+A 100,000-candidate daily mining run takes on the order of 20 seconds on all cores. Verdict: no Rust needed
+through M5. Re-measure at M9 for path-dependent strategies on minute bars.
+
 ## Consequences
 
 One language to learn and maintain for now; CI and setup stay simple. The cost is that a hot loop might be

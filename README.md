@@ -94,9 +94,9 @@ flowchart LR
 | | Milestone | Delivers | Status |
 |---|---|---|---|
 | M0 | Foundations | Package, ledger, audit log, Lab API, web shell, CI | done |
-| M1 | Data lake | Free sources (ETFs, BTC/ETH, factors), quality checks, Data Health page | next |
-| M2 | Backtest engine | Strategy library, cost model, metrics, Backtest Studio | planned |
-| M3 | Validation gauntlet | 10 stages, calibration on synthetic data, Gauntlet Console, Ledger page | planned |
+| M1 | Data lake | Free sources (ETFs, BTC/ETH, factors), quality checks, Data Health page | done |
+| M2 | Backtest engine | Strategy library, cost model, metrics, Backtest Studio | done |
+| M3 | Validation gauntlet | 10 stages, calibration on synthetic data, Gauntlet Console, Ledger page | next |
 | M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
 | M6 | Registry and alerts | Strategy board, portfolio, alert rules | planned |

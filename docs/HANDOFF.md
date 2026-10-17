@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-17, after M0
+- **Last updated:** 2026-10-17, after M2
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -62,17 +62,35 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 
 | | Milestone | State |
 |---|---|---|
-| M0 | Foundations | **Done.** Ledger, audit, metrics, Lab API, CLI, web shell with 4 pages, CI green. |
-| M1 | Data lake | **Next.** Spec below. |
-| M2 | Backtest engine | Spec below. |
-| M3 | Validation gauntlet | Spec below. |
+| M0 | Foundations | **Done** (tag `m0`). Ledger, audit, metrics, Lab API, CLI, web shell with 4 pages, CI green. |
+| M1 | Data lake | **Done** (tag `m1`). 26 series ingested on 2026-10-17, zero errors. Data Health page. |
+| M2 | Backtest engine | **Done** (tag `m2`). 6 strategies, next-open engine with costs and cash, look-ahead check, Studio. |
+| M3 | Validation gauntlet | **Next.** Spec below. |
 | M4 | Research inbox | Spec below. |
 | M5 | Strategy mining | Spec below. |
 | M6–M9 | Registry, paper trading, go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
-## 5. Specs for the next milestones
+## 5. What M1 and M2 delivered (facts worth knowing)
 
-### M1: data lake
+- **Data lake** (`qlab ingest --source all`, ~2 minutes with cached Binance zips): BTCUSDT and ETHUSDT 1d
+  (3,348 bars) and 1h (80,221 bars) since 2017-08; 21 ETFs from Yahoo (SPY since 1993, 8,487 bars); Ken
+  French FF3 + RF since 1926 (26,317 days). Warnings are real events: the 9/11 closure, the 1933 bank holiday,
+  early Binance outages.
+- **Source quirks handled:** Stooq now serves a JavaScript proof-of-work challenge, so it isn't used (do not
+  try to bypass it). Binance spot timestamps switch from milliseconds to microseconds on 2025-01-01. Yahoo
+  stamps daily bars at the session open; the lab keys them by session date at 00:00 UTC. FRED timed out.
+- **Engine contract:** decision at bar t's close, fill at bar t+1's open; returns on dividend-adjusted
+  prices; costs per side = commission + half-spread + slippage; idle cash earns Ken French RF (ETFs only).
+- **Questions:** each run is a trial on `family:symbol:interval`, e.g. `trend_sma:SPY:1d`.
+- **First results (with costs):** 200-day rule on SPY 1993-2026: CAGR 10.1% vs 10.8% buy-and-hold, Sharpe
+  0.64 vs 0.65, max drawdown 19.7% vs 55.2%. TSMOM on BTC 2017-2026: 32% vs 38% CAGR, drawdown 63% vs 83%.
+- **Speed (decision 0001):** 2.7 ms per daily backtest on SPY, 17 ms on 80k hourly BTC bars.
+- **Incident:** `.gitignore` once ignored `src/qlab/data` (pattern `data/`); fixed to `/data/`. Ruff skips
+  ignored files, which hid lint errors until then.
+
+## 6. Specs for the next milestones
+
+### M1: data lake (done; kept for reference)
 
 Free sources (all reachable from the owner's network on 2026-10-17):
 
@@ -97,7 +115,7 @@ small fixtures (no network).
 
 Exit: a full rebuild from scratch works, and quality checks run on every ingest.
 
-### M2: backtest engine and Backtest Studio
+### M2: backtest engine and Backtest Studio (done; kept for reference)
 
 - Strategy contract: `positions = strategy(bars, **params)`, values in [-1, 1], using data up to each bar.
 - Engine: position decided at bar t is held from the **open of t+1**. Day return = `p_old × gap + p_new ×
@@ -139,7 +157,7 @@ Grammar of signals × filters × exits × sizing; random/Bayesian search (add `o
 formulas; budgets per research question; every candidate is a ledger trial. Exit: noise calibration still
 holds at mining scale.
 
-## 6. Known gotchas
+## 7. Known gotchas
 
 - The desktop app's preview tool may look for `.claude/launch.json` in an old folder. A config that works:
   `uv run --project <repo> qlab serve --port 8765`. `.claude/` is gitignored.
@@ -147,7 +165,7 @@ holds at mining scale.
 - `ROADMAP.md` was written before implementation; where it differs from decisions 0001-0003, the decisions win
   (no MLflow, no Dagster yet, Vite instead of Next.js).
 
-## 7. References
+## 8. References
 
 - `ROADMAP.md` §1 critique, §2 prior art, §3 architecture and gauntlet, §5 data sources, §6 and §6b milestones
   and screens, §8 budget, §12 reading list.

@@ -7,7 +7,7 @@ __pycache__/
 *.egg-info/
 
 # Lab data (rebuilt from free sources; never committed)
-data/
+/data/
 
 # Web
 web/node_modules/

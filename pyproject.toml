@@ -1,0 +1,47 @@
+[project]
+name = "quant-lab"
+version = "0.1.0"
+description = "Evidence-first quant research lab: data lake, backtests, a validation gauntlet, a research inbox and strategy mining."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "duckdb>=1.1",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "pydantic>=2.8",
+    "rich>=13",
+    "scipy>=1.13",
+    "typer>=0.12",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+orchestration = ["dagster>=1.8", "dagster-webserver>=1.8"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+qlab = "qlab.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qlab"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

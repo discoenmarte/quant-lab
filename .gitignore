@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Lab data (rebuilt from free sources; never committed)
+data/
+
+# Web
+web/node_modules/
+web/dist/
+
+# Dagster
+.dagster_home/
+tmp*/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets
+.env
+*.key

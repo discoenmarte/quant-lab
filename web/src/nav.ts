@@ -52,7 +52,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
         label: 'Backtest Studio',
         icon: 'flask',
         milestone: 'M2',
-        ready: false,
+        ready: true,
         blurb: 'Run a strategy with realistic costs and read the full report.',
         planned: [
           'Stats banner with the trial count next to every Sharpe',

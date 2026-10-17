@@ -155,6 +155,99 @@ export interface IngestJob {
   results: { source: string; status: string; n_series: number; errors: string[] }[];
 }
 
+export interface ParamDef {
+  default: number;
+  low: number;
+  high: number;
+  step: number;
+  doc: string;
+  is_int: boolean;
+}
+
+export interface StrategyDef {
+  name: string;
+  family: string;
+  description: string;
+  reference: string;
+  params: Record<string, ParamDef>;
+}
+
+export interface Instrument {
+  source: string;
+  symbol: string;
+  interval: string;
+  first_ts: string;
+  last_ts: string;
+  n_rows: number;
+}
+
+export interface CostBps {
+  commission_bps: number;
+  spread_bps: number;
+  slippage_bps: number;
+}
+
+export interface BacktestReport {
+  meta: {
+    strategy: string;
+    params: Record<string, number>;
+    source: string;
+    symbol: string;
+    interval: string;
+    start: string;
+    end: string;
+    question: string;
+    trial_id: string | null;
+    n_trials: number;
+    costs: CostBps;
+  };
+  stats: {
+    strategy: Record<string, number>;
+    benchmark: Record<string, number>;
+    n_trades: number;
+    win_rate: number | null;
+    avg_win: number | null;
+    avg_loss: number | null;
+  };
+  costs: {
+    per_year: { commission: number; spread: number; slippage: number };
+    cash_per_year: number;
+    gross_cagr: number;
+    net_cagr: number;
+    turnover_per_year: number;
+    cost_per_unit: number;
+  };
+  series: { time: number[]; equity: number[]; benchmark: number[]; drawdown: number[]; position: number[] };
+  monthly: { year: number; month: number; ret: number }[];
+  trades: {
+    entry: string | null;
+    exit: string | null;
+    entry_price: number;
+    exit_price: number | null;
+    side: string;
+    bars: number;
+    ret: number;
+  }[];
+}
+
+export interface TrialRow {
+  trial_id: string;
+  created_at: string;
+  question: string;
+  family: string;
+  strategy: string;
+  params: Record<string, number>;
+  symbol: string;
+  start_date: string | null;
+  end_date: string | null;
+  source: string;
+  sharpe: number | null;
+  cagr: number | null;
+  max_dd: number | null;
+  n_obs: number;
+  metrics: Record<string, number>;
+}
+
 export interface SystemInfo extends Clocks {
   version: string;
   python: string;

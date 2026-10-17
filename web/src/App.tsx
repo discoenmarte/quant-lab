@@ -9,6 +9,7 @@ import { GlossaryProvider } from './glossary';
 import { useApi } from './hooks';
 import { NAV, NAV_ITEMS } from './nav';
 import { Audit } from './pages/Audit';
+import { BacktestStudio } from './pages/BacktestStudio';
 import { DataHealth } from './pages/DataHealth';
 import { Glossary } from './pages/Glossary';
 import { Home } from './pages/Home';
@@ -19,6 +20,7 @@ import { System } from './pages/System';
 const PAGES: Record<string, ReactElement> = {
   '/': <Home />,
   '/data': <DataHealth />,
+  '/backtest': <BacktestStudio />,
   '/system': <System />,
   '/audit': <Audit />,
   '/glossary': <Glossary />,

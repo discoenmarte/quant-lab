@@ -148,3 +148,20 @@ def test_portfolio_api_and_gauntlet_endpoint(monkeypatch):
     assert card.status_code == 200, card.text
     assert card.json()["meta"]["kind"] == "portfolio" and len(card.json()["stages"]) == 10
     assert client.post("/api/portfolio/run", json={"universe": "nope"}).status_code == 404
+
+
+def test_a_preregistered_batch_is_deflated_against_itself_not_by_order(monkeypatch):
+    """Every candidate in a batch counts the whole batch as its trials, whatever order they run in."""
+    from qlab import audit
+
+    thresholds.update({"n_perm": 60, "n_boot": 60, "grid_max": 30}, "fast tests")
+    for i, s in enumerate(["SPY", "EFA", "TLT", "GLD"]):
+        write_etf(s, 4200, i + 50, "2008-01-02")
+    monkeypatch.setitem(runner.UNIVERSES, "tiny", {"members": [("yahoo", s) for s in ["SPY", "EFA", "TLT", "GLD"]],
+                                                   "description": "test"})
+    sealed = lockbox.sealed_from()
+    entries = [(PanelSubject.load("tiny", s, sealed), None) for s in ("trend_filter", "xs_momentum", "tsmom")]
+    cards = pipeline.judge_batch(entries, "published defaults, chosen before looking")
+    assert [c["meta"]["n_trials"] for c in cards] == [3, 3, 3]
+    assert len({c["meta"]["batch"] for c in cards}) == 1
+    assert any(e["action"] == "gauntlet.preregister" for e in audit.recent(50))

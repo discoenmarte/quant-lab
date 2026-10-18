@@ -188,6 +188,34 @@ def portfolio_gauntlet(
     _print_card(run_portfolio_gauntlet(universe, strategy, _parse_params(params), seed, actor="cli"))
 
 
+@app.command("portfolio-batch")
+def portfolio_batch(
+    universes: str = typer.Option("asset_classes_long,all_etfs", help="Comma-separated universe names"),
+    strategies: str = typer.Option("tsmom,trend_filter,xs_momentum,risk_parity,vol_managed",
+                                   help="Comma-separated portfolio strategies, judged at their published defaults"),
+    note: str = typer.Option(..., help="Why this batch, recorded before anything runs"),
+    seed: int = typer.Option(7, help="Random seed"),
+) -> None:
+    """Judge a pre-registered batch of portfolio strategies at their defaults, deflated against the batch.
+
+    Args:
+        universes: Universe names.
+        strategies: Strategy keys.
+        note: The pre-registration note.
+        seed: Random seed.
+    """
+    from . import lockbox
+    from .gauntlet.pipeline import judge_batch
+    from .gauntlet.subjects import PanelSubject
+
+    sealed = lockbox.sealed_from()
+    entries = [(PanelSubject.load(u.strip(), s.strip(), sealed), None)
+               for u in universes.split(",") for s in strategies.split(",")]
+    for card in judge_batch(entries, note, seed, actor="cli"):
+        _print_card(card)
+        typer.echo("")
+
+
 def _print_card(card: dict) -> None:
     """Print a report card as one line per stage.
 

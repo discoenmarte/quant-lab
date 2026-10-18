@@ -597,7 +597,12 @@ def _complete(strat: Any, params: dict[str, float] | None) -> dict[str, float]:
 
 
 def judge_subject(
-    subject: BarSubject | PanelSubject, params: dict[str, float] | None, seed: int = 7, actor: str = "user"
+    subject: BarSubject | PanelSubject,
+    params: dict[str, float] | None,
+    seed: int = 7,
+    actor: str = "user",
+    selection: list[float] | None = None,
+    batch: str | None = None,
 ) -> dict[str, Any]:
     """Run the gauntlet on a subject, record its grid as trials, and save the report card.
 
@@ -609,6 +614,9 @@ def judge_subject(
         params: Candidate parameters; missing ones take their defaults.
         seed: Seed for the grid fill, permutations and bootstrap, for reproducibility.
         actor: Who ran it, for the audit log.
+        selection: Annual edge Sharpes to deflate against, including the candidate's own, instead of the ledger's
+            current set. Used by ``judge_batch``.
+        batch: Pre-registered batch id, recorded on the card.
 
     Returns:
         The report card: ``card_id``, ``verdict`` (``candidate`` or ``rejected``), ``failed_stage``, the
@@ -620,13 +628,17 @@ def judge_subject(
     code = code_version()
     version, th = thresholds.current()
     cand_params = _complete(subject.strat, params)
-    prior = ledger.selection_set(subject.scope, subject.interval)
-    cand_key = (subject.strategy, db.dumps(cand_params), *subject.research)
-    counted = any((t["strategy"], t["params"], t["start"], t["end"]) == cand_key for t in prior)
+    if selection is None:
+        prior = ledger.selection_set(subject.scope, subject.interval)
+        cand_key = (subject.strategy, db.dumps(cand_params), *subject.research)
+        counted = any((t["strategy"], t["params"], t["start"], t["end"]) == cand_key for t in prior)
+        selection = [t["edge_sharpe"] for t in prior]
+    else:
+        counted = True
 
     started = time.perf_counter()
-    out = evaluate(subject, cand_params, th=th, selection=[t["edge_sharpe"] for t in prior],
-                   candidate_counted=counted, portfolio=validated_portfolio(subject.question), seed=seed)
+    out = evaluate(subject, cand_params, th=th, selection=selection, candidate_counted=counted,
+                   portfolio=validated_portfolio(subject.question), seed=seed)
     ledger.record_trials([
         {**r, "question": subject.question, "family": subject.family, "strategy": subject.strategy,
          "symbol": subject.scope, "source": "gauntlet", "data_hash": subject.data_hash} for r in out["records"]
@@ -648,6 +660,7 @@ def judge_subject(
                  "strategy": subject.strategy, "params": cand_params, "research": out["research"],
                  "lockbox_from": str(subject.sealed.date()), "lockbox_spent": spent, "grid_size": out["grid_size"],
                  "n_trials": out["n_trials"], "seed": seed, "data_hash": subject.data_hash, "version": code,
+                 "batch": batch,
                  "elapsed_s": round(time.perf_counter() - started, 2), "timings": out["timings"]},
         "thresholds": {"version": version, **th},
         "stages": [asdict(s) for s in stages],
@@ -657,6 +670,46 @@ def judge_subject(
     audit.log("gauntlet.run", target=card_id, actor=actor,
               details={"question": subject.question, "verdict": verdict, "failed_stage": out["failed_stage"]})
     return card
+
+
+def judge_batch(
+    entries: list[tuple[BarSubject | PanelSubject, dict[str, float] | None]],
+    note: str,
+    seed: int = 7,
+    actor: str = "user",
+) -> list[dict[str, Any]]:
+    """Judge a pre-registered batch of candidates, each deflated against the whole batch.
+
+    When several candidates are chosen together, before any of them is seen (for example the published defaults
+    of five strategy families), the honest selection set for each is the trials that existed before the batch
+    plus every candidate in the batch on the same scope. Judging them one by one would instead deflate each
+    later candidate against the grids of the earlier ones, so the verdicts would depend on the order. The batch
+    is written to the audit log before anything runs.
+
+    Args:
+        entries: ``(subject, params)`` pairs; params None means defaults.
+        note: Why these candidates, in plain words (recorded with the pre-registration).
+        seed: Random seed for every run.
+        actor: Who registered it.
+
+    Returns:
+        One report card per entry, in order.
+    """
+    batch = uuid.uuid4().hex[:8]
+    plan = [{"question": s.question, "params": _complete(s.strat, p)} for s, p in entries]
+    audit.log("gauntlet.preregister", target=batch, actor=actor, reason=note, details={"candidates": plan})
+    prior = {(s.scope, s.interval): [t["edge_sharpe"] for t in ledger.selection_set(s.scope, s.interval)]
+             for s, _ in entries}
+    edges: dict[tuple[str, str], list[float]] = {}
+    for (s, _), item in zip(entries, plan, strict=True):
+        sim = s.simulate(item["params"])
+        e, _ = metrics.edge(sim.net - s.rf, sim.bench - s.rf)
+        edges.setdefault((s.scope, s.interval), []).append(_ann(stats.sharpe(e), s.dpy))
+    cards = []
+    for (s, p) in entries:
+        key = (s.scope, s.interval)
+        cards.append(judge_subject(s, p, seed, actor, selection=prior[key] + edges[key], batch=batch))
+    return cards
 
 
 def run_gauntlet(

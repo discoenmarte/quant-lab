@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-18, after M3 and M3b
+- **Last updated:** 2026-10-18, after M3, M3b and M7a
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -38,7 +38,7 @@ How to pick this project up and keep building it. Read this, then `README.md`, `
 ```
 src/qlab/config.py        paths (QLAB_DATA overrides the data folder; tests use it)
 src/qlab/db.py            DuckDB connection + schema (trials, audit, sources, series, quality_issues,
-                          gauntlet_cards, thresholds, lockbox_uses)
+                          gauntlet_cards, thresholds, lockbox_uses, paper_entries, paper_decisions, paper_scores)
 src/qlab/ledger.py        record_trial(s) / count_trials / selection_set / list_trials / questions
 src/qlab/lockbox.py       fixed sealed date, spent questions (from the ledger), clamp_end for Studio runs
 src/qlab/audit.py         log / recent
@@ -48,16 +48,22 @@ src/qlab/backtest/metrics.py   Sharpe, Sortino, CAGR, drawdowns, Calmar, exposur
 src/qlab/portfolio/       panel (aligned universes), engine (weights), strategies, leakage, runner, synthetic
 src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, bootstrap), thresholds,
                           subjects (bars or panel), pipeline (ten stages, cards, lockbox), calibration
+src/qlab/paper/           forward paper book: sessions (bar open/close times), book (add, decide, retire), score
+                          (replay through the engines), monitor (bands, CUSUM alarm), nightly (job, launchd)
 src/qlab/api/main.py      FastAPI app; serves web/dist at /
 src/qlab/api/routes_core.py    /api/health, /system, /overview, /audit, /glossary, POST /demo
-src/qlab/cli.py           qlab serve | init | demo
+src/qlab/api/routes_paper.py   /api/paper/book, /entries, /entries/{id}, /entries/{id}/retire, /run, /score
+src/qlab/cli.py           qlab serve | init | ingest | backtest | portfolio | gauntlet | calibrate | paper ...
 tests/                    pytest; conftest gives each test its own QLAB_DATA folder
 web/src/App.tsx           shell: sidebar (nav.ts), top bar, routes, command palette
 web/src/nav.ts            every page, its milestone and whether it's built (flip `ready` when done)
-web/src/pages/            Home, System, Audit, Glossary, Placeholder
+web/src/pages/            Home, DataHealth, BacktestStudio, PortfolioLab, Gauntlet, Ledger, TradingDesk, System,
+                          Audit, Glossary, Placeholder
 web/src/components/       Card, Stat, Badge, InfoTip, DataTable, EChart, Icon, Clocks, Toast, CommandPalette
 .github/workflows/ci.yml  ruff + pytest, and web type-check + build, on every push
-docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack
+docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack, 0004 gauntlet,
+                          0005 portfolios and forward evidence first, 0007 forward paper book
+ops/launchd/              template for the nightly paper job (rendered by `make paper-launchd`, never installed)
 ```
 
 Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help` lists everything.
@@ -72,7 +78,7 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M3 | Validation gauntlet | **Done** (tag `m3`). Ten stages on edge returns, fixed lockbox, calibrated in three studies. |
 | M3b | Portfolio lab | **Done** (tag `m3b`). Engine, six strategies, portfolio gauntlet and calibration, Portfolio Lab page. |
 | M3c | Breadth: crypto cross-section | **Next** (docs/SCALING.md). Spec below. |
-| M7a | Forward paper book | After M3c (decision 0005). Spec below. |
+| M7a | Forward paper book | **Done** (tag `m7a`). Decisions before outcomes, engine-exact scoring, frozen bands, CUSUM alarm, nightly job, Trading Desk. |
 | M6, M7b, M4, M5 | Registry, broker paper trading, inbox, mining | In that order (decision 0005). |
 | M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
@@ -155,12 +161,27 @@ December 2022 delisting, BTTUSDT through January 2022), so a survivorship-free c
    synthetic panels with listings and delistings.
 5. **Pre-register** the first batch (published crypto factors at their published parameters) before any run.
 
-### M7a: forward paper book
+### M7a: forward paper book (done; decision 0007)
 
-Each trading day after the close: compute target weights of every card in the book from data up to that close,
-store them with the UTC time they were decided (before the next bar exists), then score them as bars arrive.
-Append-only, no broker. Start with every validated or candidate portfolio card. Pages: forward P&L against the
-backtest's expected band, days in the book, a CUSUM decay alarm. Scheduling: a launchd job the owner installs.
+- `qlab paper add <card>...` puts gauntlet cards (any verdict, daily or portfolio) in the book and re-simulates the
+  research period once to freeze what it expects: research beta, daily edge and log-return moments, and the card's
+  own research band. `qlab paper run` records each active entry's targets for the latest final close with
+  `decided_at` and `next_open`; `qlab paper score` replays the decisions through the engines and saves
+  `reports/paper/<entry>.json`; `qlab paper list | retire | nightly | launchd`.
+- **Refusals:** a backfill (a later final bar is stored) and stale data (the next session has closed but isn't
+  stored). Late decisions (after the next open) are kept and flagged. Runs are idempotent.
+- **Ledger:** paper trials go to `paper:<question>` with source `paper`: one reference trial when a card joins, one
+  per scoring that sees new bars. They don't spend a lockbox or enter selection sets.
+- **Power, measured:** for the trend-filter near-miss (edge Sharpe 0.33) the alarm threshold is 41.6 and it fires
+  ~5.5 years after the edge vanishes on average; the forward band excludes zero only after ~21 years. The book
+  catches breaks and large decay, not small ones (decision 0007 §5).
+- **Replay check** (scratch lab, real bars 2026-08-28 to 2026-10-16 fed one day at a time): 34 forward days for both
+  trend-filter cards and risk parity, every decision 11.5 to 59.5 hours before its open, all inside their bands.
+- **Not yet started on the real lab.** The owner's `qlab serve` held the database during M7a, and it runs the old
+  code. To start the clock: restart `qlab serve`, then on the Trading Desk add `9f757395ca74`
+  (trend_filter:all_etfs) and `c1c207ae352d` (trend_filter:asset_classes_long) and click "Run today's decisions";
+  or stop the server and run `uv run qlab paper add 9f757395ca74 c1c207ae352d --note "..."` and
+  `uv run qlab paper run`. Then `make paper-launchd` and follow the printed steps.
 
 
 ### M1: data lake (done; kept for reference)
@@ -243,6 +264,12 @@ holds at mining scale.
   that make the permutation stage impossible are refused.
 - Calibration grows `data/lab.duckdb` by about 60 MB per full study.
 - For UI work against a copy of the lab, `.claude/launch.json` has a `lab-scratch` entry that sets `QLAB_DATA`.
+- Paper book: a missed nightly run can't be made up (backfills are refused). If the job ran on stale data it says
+  "stale data: ingest first"; ingest and run again before the next session closes. Holidays aren't modelled, so a
+  missed run right before a holiday is refused rather than accepted.
+- The lockbox and the paper book's forward days overlap (decision 0007 §6). Before a card in the book opens its
+  lockbox, cap the lockbox window at the entry's first decision.
+- Crypto daily decisions are always late with the public archive (it publishes after the next candle opens).
 
 ## 8. References
 

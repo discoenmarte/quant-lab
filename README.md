@@ -22,6 +22,9 @@ make serve     # build the web app and serve everything on http://127.0.0.1:8765
 
 Development with hot reload: `make dev-api` in one terminal, `make dev-web` in another (http://127.0.0.1:5173).
 
+Forward paper book: add gauntlet cards on the Trading Desk (or `uv run qlab paper add <card>`), then run
+`make paper-nightly` after each US close, or `make paper-launchd` to print a launchd job that does it for you.
+
 ## Architecture
 
 Simple, strong, and able to grow. One Python package, one database file, one API, one static web app. Each
@@ -105,7 +108,8 @@ flowchart LR
 | M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
 | M6 | Registry and alerts | Strategy board, portfolio, alert rules | planned |
-| M7 | Paper trading | Forward paper book first (M7a, moved up by [decision 0005](docs/decisions/0005-portfolios-and-forward-evidence-first.md)), then broker paper trading, trading desk, kill switch | planned |
+| M7a | Forward paper book | Daily targets recorded before the next bar exists, scored with the backtest engines against frozen research bands, a CUSUM decay alarm, a nightly job, Trading Desk ([decision 0007](docs/decisions/0007-forward-paper-book.md)) | done |
+| M7b | Broker paper trading | Broker paper accounts, real fills and reconciliation, kill switch | planned |
 | M8 | Go-live gate | Evidence checklist, limits outside any model | planned |
 | M9 | Intraday mode | Validated intraday library, morning selector, replay | planned |
 
@@ -115,12 +119,13 @@ The full plan, with each milestone's screens, costs and the research it rests on
 ## Repository layout
 
 ```
-src/qlab/          Python package (data, backtest, portfolio, gauntlet, api, ledger, lockbox, audit)
+src/qlab/          Python package (data, backtest, portfolio, gauntlet, paper, api, ledger, lockbox, audit)
 tests/             pytest suite; each test gets its own data folder
 web/               React app (Vite + TypeScript)
 docs/STYLE.md      docstring and commit conventions
 docs/decisions/    architecture decision records
 docs/HANDOFF.md    implementation status and how to continue
+ops/launchd/       template for the nightly paper job (rendered and printed, never installed)
 data/              local data lake and database (not committed)
 ```
 
@@ -131,3 +136,6 @@ data/              local data lake and database (not committed)
 3. [Keep the stack small](docs/decisions/0003-orchestration-and-ui-stack.md)
 4. [Gauntlet design: edge returns, a fixed lockbox, honest N, thresholds from calibration](docs/decisions/0004-gauntlet-design.md)
 5. [Portfolios and forward evidence before the paper inbox and mining](docs/decisions/0005-portfolios-and-forward-evidence-first.md)
+
+<!-- 0006 belongs to M3c. -->
+7. [The forward paper book: decisions before outcomes, frozen expectations, honest power](docs/decisions/0007-forward-paper-book.md)

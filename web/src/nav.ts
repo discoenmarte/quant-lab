@@ -117,7 +117,15 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     group: 'Operations',
     items: [
       { path: '/board', label: 'Strategy Board', icon: 'board', milestone: 'M6', ready: false, blurb: 'Candidates, incubation, live, retired.' },
-      { path: '/desk', label: 'Trading Desk', icon: 'desk', milestone: 'M7', ready: false, blurb: 'Paper trading with a kill switch.' },
+      {
+        path: '/desk',
+        label: 'Trading Desk',
+        icon: 'desk',
+        milestone: 'M7a',
+        ready: true,
+        blurb: 'Forward paper book: targets recorded before the outcome, scored as bars arrive.',
+        planned: ['Broker paper accounts and fills (M7b)', 'Kill switch and reconciliation (M7b)'],
+      },
       { path: '/gate', label: 'Go-Live Gate', icon: 'gate', milestone: 'M8', ready: false, blurb: 'Evidence checklist before any real money.' },
       { path: '/intraday', label: 'Intraday Cockpit', icon: 'clock', milestone: 'M9', ready: false, blurb: 'Pre-market briefing and replay.' },
     ],

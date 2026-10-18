@@ -441,3 +441,136 @@ export interface PortfolioReport {
   monthly: { year: number; month: number; ret: number }[];
   costs: { per_year: number; cash_per_year: number; turnover_per_year: number };
 }
+
+/** One decision of the paper book: the target an entry decided at one close, before the next bar existed. */
+export interface PaperDecision {
+  entry_id: string;
+  /** Session date of the close the decision used. */
+  as_of: string;
+  /** UTC time the decision was recorded. */
+  decided_at: string;
+  /** Weight per instrument (a position in [-1, 1] for a single instrument). */
+  targets: Record<string, number>;
+  /** UTC time of the first open the decision fills at. */
+  next_open: string;
+  inputs_hash: string;
+  code_version: string;
+  /** Hours from the decision to that open; negative means it was recorded after the open (late). */
+  lead_hours: number;
+}
+
+/** Forward edge Sharpe against the card's research band (annual values). */
+export interface PaperBand {
+  research: number | null;
+  forward: number | null;
+  floor: number | null;
+  ceiling: number | null;
+  status: 'inside' | 'below' | 'above' | null;
+  /** Forward days before the band's floor clears zero, if the research edge is the truth. */
+  evidence_days: number | null;
+  evidence_years: number | null;
+}
+
+/** CUSUM decay alarm state. */
+export interface PaperAlarm {
+  applicable: boolean;
+  reason?: string;
+  k?: number;
+  h?: number;
+  arl0_days?: number;
+  arl1_days?: number;
+  value?: number;
+  alarm: boolean;
+  first_alarm: string | null;
+}
+
+/** One row of the book table: an entry with its latest decision and forward headline numbers. */
+export interface PaperEntry {
+  entry_id: string;
+  card_id: string;
+  kind: 'bars' | 'portfolio';
+  question: string;
+  family: string;
+  strategy: string;
+  scope: string;
+  params: Record<string, number>;
+  verdict: Verdict;
+  added_at: string;
+  status: 'active' | 'retired';
+  note: string;
+  retired_at: string | null;
+  research_edge_sharpe: number | null;
+  n_decisions: number;
+  last_decision: PaperDecision | null;
+  late: number;
+  scored_at: string | null;
+  through: string | null;
+  n_days: number;
+  days_in_book: number | null;
+  forward_return: number | null;
+  benchmark_return: number | null;
+  band: PaperBand | null;
+  alarm: PaperAlarm | null;
+}
+
+/** The paper book and the cards that could join it. */
+export interface PaperBook {
+  entries: PaperEntry[];
+  eligible: CardRow[];
+}
+
+/** Latest forward report of an entry, saved by each scoring. */
+export interface PaperReport {
+  scored_at: string;
+  days_in_book: number;
+  through: string | null;
+  n_days: number;
+  reference: { edge_sharpe: number | null; beta: number | null; research: [string, string]; n_days: number; trial_id: string };
+  decisions: { n: number; late: number; last: PaperDecision | null; rows: PaperDecision[] };
+  stats: { strategy: Record<string, number>; benchmark: Record<string, number> } | null;
+  band: PaperBand;
+  alarm: PaperAlarm | null;
+  series: {
+    time: number[];
+    equity: number[];
+    benchmark: number[];
+    expected: number[];
+    expected_lo: number[];
+    expected_hi: number[];
+    edge: number[];
+    edge_expected: number[];
+    edge_lo: number[];
+    edge_hi: number[];
+    cusum: number[];
+    exposure: number[];
+  } | null;
+  trial_id: string | null;
+}
+
+/** One entry's page: its row, every decision (newest first) and the latest report. */
+export interface PaperEntryDetail {
+  entry: PaperEntry;
+  decisions: PaperDecision[];
+  report: PaperReport | null;
+}
+
+/** Result of the daily run for one entry. */
+export interface PaperRunResult {
+  entry_id: string;
+  question: string;
+  status: 'decided' | 'exists' | 'refused' | 'error';
+  as_of: string | null;
+  message: string;
+  late?: boolean;
+}
+
+/** Result of scoring one entry. */
+export interface PaperScoreResult {
+  entry_id: string;
+  question: string;
+  status: 'scored' | 'error';
+  through?: string | null;
+  n_days?: number;
+  alarm?: boolean | null;
+  message: string;
+}

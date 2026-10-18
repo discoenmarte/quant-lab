@@ -18,6 +18,7 @@ import { Ledger } from './pages/Ledger';
 import { PortfolioLab } from './pages/PortfolioLab';
 import { Placeholder } from './pages/Placeholder';
 import { System } from './pages/System';
+import { TradingDesk } from './pages/TradingDesk';
 
 /** Built pages by route. Routes without an entry render their milestone placeholder. */
 const PAGES: Record<string, ReactElement> = {
@@ -27,6 +28,7 @@ const PAGES: Record<string, ReactElement> = {
   '/portfolio': <PortfolioLab />,
   '/gauntlet': <Gauntlet />,
   '/ledger': <Ledger />,
+  '/desk': <TradingDesk />,
   '/system': <System />,
   '/audit': <Audit />,
   '/glossary': <Glossary />,

@@ -22,7 +22,7 @@ MILESTONES = [
     {"id": "M0", "name": "Foundations", "status": "done"},
     {"id": "M1", "name": "Data lake", "status": "done"},
     {"id": "M2", "name": "Backtest engine", "status": "done"},
-    {"id": "M3", "name": "Validation gauntlet", "status": "in progress"},
+    {"id": "M3", "name": "Validation gauntlet", "status": "done"},
     {"id": "M4", "name": "Research inbox", "status": "planned"},
     {"id": "M5", "name": "Strategy mining", "status": "planned"},
     {"id": "M6", "name": "Registry, portfolio, alerts", "status": "planned"},

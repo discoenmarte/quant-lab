@@ -119,6 +119,11 @@ everything through dashboards.
 Starting thresholds (to be calibrated in M3): DSR ≥ 0.95 · PBO ≤ 0.2 · permutation p ≤ 0.01 after correction ·
 plateau ≥ 0.6 · positive net in most regimes · correlation to portfolio ≤ 0.5.
 
+*Calibrated in M3 (decision 0004):* statistics are computed on the edge beyond buy-and-hold; DSR ≥ 0.95 with N
+counted across all families on the instrument; permutation p ≤ 0.05 with volatility-preserving shuffles; walk-forward
+needs a positive out-of-sample edge; PBO is reported but not gated (on a plateau it is a coin flip even for a real
+edge); the lockbox is everything from 2024-10-01, spent per research question the first time anything looks at it.
+
 ---
 
 ## 3b. Operating modes and schedule

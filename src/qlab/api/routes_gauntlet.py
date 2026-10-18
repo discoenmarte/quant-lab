@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from .. import lockbox
 from ..backtest.strategies import REGISTRY
 from ..gauntlet import calibration, pipeline, thresholds
+from ..portfolio.strategies import REGISTRY as PORTFOLIOS
 from ..timeutil import now_utc
 
 router = APIRouter(prefix="/gauntlet")
@@ -24,18 +25,22 @@ class GauntletRequest(BaseModel):
     """Body of ``POST /api/gauntlet/run``.
 
     Attributes:
-        source: Data source of the instrument.
-        symbol: Instrument.
-        interval: Bar interval.
-        strategy: Registry key.
+        kind: ``"bars"`` for a single-instrument strategy, ``"portfolio"`` for a portfolio strategy.
+        source: Data source of the instrument (bars).
+        symbol: Instrument (bars).
+        interval: Bar interval (bars).
+        universe: Universe name (portfolio).
+        strategy: Registry key (single-instrument or portfolio registry, by ``kind``).
         params: Candidate parameters; missing ones take their defaults.
-        costs: ``"auto"``, a preset name, or a dict of cost-model fields in basis points.
+        costs: ``"auto"``, a preset name, or a dict of cost-model fields in basis points (bars).
         seed: Seed for the grid fill, permutations and bootstrap.
     """
 
-    source: str
-    symbol: str
+    kind: Literal["bars", "portfolio"] = "bars"
+    source: str = ""
+    symbol: str = ""
     interval: str = "1d"
+    universe: str = "multi_asset"
     strategy: str = "trend_sma"
     params: dict[str, float] = Field(default_factory=dict)
     costs: str | dict[str, float] = "auto"
@@ -111,11 +116,16 @@ def run(req: GauntletRequest) -> dict[str, Any]:
     Raises:
         HTTPException: 404 for an unknown strategy or missing data; 400 for too little research data.
     """
-    if req.strategy not in REGISTRY:
+    registry = PORTFOLIOS if req.kind == "portfolio" else REGISTRY
+    if req.strategy not in registry:
         raise HTTPException(status_code=404, detail=f"unknown strategy {req.strategy}")
     try:
+        if req.kind == "portfolio":
+            return pipeline.run_portfolio_gauntlet(req.universe, req.strategy, req.params, req.seed)
         return pipeline.run_gauntlet(req.source, req.symbol, req.interval, req.strategy, req.params, req.costs,
                                      req.seed)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=f"unknown universe {err}") from err
     except FileNotFoundError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
     except ValueError as err:

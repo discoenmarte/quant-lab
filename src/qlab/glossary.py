@@ -138,4 +138,30 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "short": "A market state, such as bull, bear, calm or volatile.",
         "long": "A robust strategy shouldn't depend on one regime that may not come back.",
     },
+    "paper_book": {
+        "term": "Forward paper book",
+        "short": "Each day's targets, recorded before the next bar exists, then scored as bars arrive.",
+        "long": "The only evidence no backtest can fake: the decisions are timestamped before their outcomes. "
+        "Backfills are refused. The band shows where the forward record should be if the research result is "
+        "true (90% of the time inside it).",
+    },
+    "forward_edge": {
+        "term": "Forward edge Sharpe",
+        "short": "Edge Sharpe on the days after each decision, with the research period's beta held fixed.",
+        "long": "Compared with the card's research edge Sharpe plus or minus 1.645 standard errors. With a few "
+        "months of data the band is very wide; an edge Sharpe of 0.3 needs decades to tell from zero.",
+    },
+    "cusum": {
+        "term": "CUSUM decay alarm",
+        "short": "Adds up, day by day, the evidence that the edge has fallen from its research level to zero.",
+        "long": "Page's cumulative-sum test. It fires when the sum crosses a threshold set for one false alarm "
+        "every ten years while the edge is as researched. It catches breaks and large decay quickly and small "
+        "decay only after years.",
+    },
+    "lead_time": {
+        "term": "Decision lead time",
+        "short": "Hours between recording a decision and the open it fills at.",
+        "long": "Positive is the honest case: decided after the close, before the next open. A decision "
+        "recorded after the open is kept but marked late, because filling it at that open is optimistic.",
+    },
 }

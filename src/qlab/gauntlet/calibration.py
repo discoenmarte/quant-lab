@@ -14,6 +14,13 @@ the truth is known:
 Portfolio strategies are calibrated the same way on synthetic eight-asset panels (a common market factor plus
 GARCH shocks per asset; planted trends flip independently per asset).
 
+Cross-sectional crypto rules (M3c) are calibrated on synthetic crypto cross-sections where coins list and
+delist, the universe is the top 30 or 100 by trailing dollar volume, and positions drift (see
+``portfolio.synthetic.synthetic_crypto_panel``). Their noise markets have zero expected return for every coin,
+so every rule, low volatility included, has a true edge of exactly zero. Power is measured on planted momentum
+(a hidden trend per coin) for the momentum rule and on a planted size premium for the size rule. Families are
+named ``xs<top>/<strategy>``.
+
 From the two rates the report also computes the precision of the gate against a random-admission control at
 the same prior share of real edges (Zheng, 2026): a gate is worth having only if what it admits is more often
 real than what a coin would admit.
@@ -44,7 +51,7 @@ from ..backtest.strategies import REGISTRY
 from ..data.bars import normalize_bars
 from ..portfolio.engine import run_portfolio
 from ..portfolio.strategies import REGISTRY as PORTFOLIOS
-from ..portfolio.synthetic import synthetic_panel
+from ..portfolio.synthetic import synthetic_crypto_panel, synthetic_panel
 from ..timeutil import naive_utc
 from . import thresholds
 from .pipeline import STAGES, build_grid, clean, column_sharpes, edge_matrix, evaluate, judge
@@ -59,6 +66,93 @@ PORTFOLIO_NOISE = ["portfolio/tsmom", "portfolio/trend_filter", "portfolio/xs_mo
 PORTFOLIO_POWER = ["portfolio/tsmom", "portfolio/trend_filter"]
 PORTFOLIO_YEARS = 18  # about the research length of the multi-asset universe
 PORTFOLIO_ASSETS = 8
+XS_STRATEGIES = ["xs_weekly_momentum", "xs_reversal", "xs_low_vol", "xs_small_size"]
+XS_POWER = ["xs_weekly_momentum", "xs_small_size"]  # planted momentum, planted size premium
+XS_YEARS = 5.6  # the research length of the crypto universes (2019-02-14 to the lockbox)
+XS_COINS = {30: 120, 100: 300}  # universe size -> coins that ever trade in the synthetic market
+XS_TRUTH_YEARS, XS_TRUTH_SEEDS = 50.0, 8  # true edges average eight 50-year markets (standard error near 0.05)
+
+
+def _xs_parts(family: str) -> tuple[int, str]:
+    """Universe size and strategy key of a cross-sectional calibration family.
+
+    Args:
+        family: ``xs<top>/<strategy>``, e.g. ``"xs30/xs_weekly_momentum"``.
+
+    Returns:
+        ``(top, strategy)``.
+    """
+    head, key = family.split("/", 1)
+    return int(head[2:]), key
+
+
+def xs_panel(family: str, years: float, planted: float, seed: int):
+    """The synthetic crypto cross-section a cross-sectional family is calibrated on.
+
+    Args:
+        family: ``xs<top>/<strategy>``.
+        years: Length in years.
+        planted: Planted edge: the hidden trend for every rule but size, the size premium for the size rule.
+        seed: Random seed.
+
+    Returns:
+        A dynamic ``Panel``.
+    """
+    top, key = _xs_parts(family)
+    size = key == "xs_small_size"
+    return synthetic_crypto_panel(years, XS_COINS[top], top, trend=0.0 if size else planted,
+                                  size_premium=planted if size else 0.0, seed=seed)
+
+
+def _xs_truth_one(args: tuple[str, float, int]) -> float:
+    """Edge Sharpe of a cross-sectional family's default rule on one long synthetic market (a pool worker).
+
+    Args:
+        args: ``(family, planted, seed)``.
+
+    Returns:
+        Annual edge Sharpe after costs.
+    """
+    family, planted, seed = args
+    panel = xs_panel(family, XS_TRUTH_YEARS, planted, seed)
+    res = run_portfolio(panel, PORTFOLIOS[_xs_parts(family)[1]].weights(panel))
+    e, _ = metrics.edge(res.net, res.benchmark)
+    return float(metrics.sharpe(e, None, panel.dpy))
+
+
+def xs_true_edges(pairs: list[tuple[str, float]], pool: ProcessPoolExecutor) -> dict[tuple[str, float], float]:
+    """True edges of cross-sectional families at planted sizes, each the mean over ``XS_TRUTH_SEEDS`` markets.
+
+    Args:
+        pairs: ``(family, planted)`` to evaluate.
+        pool: Process pool to spread the markets over.
+
+    Returns:
+        ``{(family, planted): edge}``.
+    """
+    jobs = [(f, x, 777_000 + k) for f, x in pairs for k in range(XS_TRUTH_SEEDS)]
+    values = list(pool.map(_xs_truth_one, jobs))
+    out: dict[tuple[str, float], list[float]] = {}
+    for (f, x, _), v in zip(jobs, values, strict=True):
+        out.setdefault((f, x), []).append(v)
+    return {k: float(np.mean(v)) for k, v in out.items()}
+
+
+def xs_sizes(family: str, edges: tuple[float, ...], pool: ProcessPoolExecutor) -> dict[float, float]:
+    """Planted sizes that give a cross-sectional family each target true edge, by interpolating a grid.
+
+    Args:
+        family: ``xs<top>/<strategy>``.
+        edges: Target edge Sharpes.
+        pool: Process pool.
+
+    Returns:
+        ``{target: planted size}``.
+    """
+    grid = [0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
+    truth = xs_true_edges([(family, x) for x in grid], pool)
+    curve = np.maximum.accumulate(np.array([truth[(family, x)] for x in grid]))  # edge grows with the size
+    return {t: round(float(np.interp(t, curve, grid)), 4) for t in edges}
 
 
 def synthetic_bars(years: float, trend: float = 0.0, seed: int = 0, vol: float = 0.16, drift: float = 0.06,
@@ -118,8 +212,10 @@ def true_edge(family: str, trend: float, years: float = 400.0, seed: int = 12345
         seed: Random seed.
 
     Returns:
-        Annual edge Sharpe after ETF costs.
+        Annual edge Sharpe after ETF costs (crypto costs for cross-sectional families).
     """
+    if family.startswith("xs"):
+        return float(np.mean([_xs_truth_one((family, trend, 777_000 + k)) for k in range(XS_TRUTH_SEEDS)]))
     if family.startswith("portfolio/"):
         panel = synthetic_panel(min(years, 150.0), PORTFOLIO_ASSETS, trend, seed)
         res_p = run_portfolio(panel, PORTFOLIOS[family.split("/", 1)[1]].weights(panel))
@@ -136,12 +232,17 @@ def make_subject(task: dict[str, Any]) -> BarSubject | PanelSubject:
     """The synthetic market of one calibration run, as a gauntlet subject with no lockbox.
 
     Args:
-        task: ``family`` (a single-instrument strategy key, or ``portfolio/<key>``), ``years``, ``trend``, ``seed``.
+        task: ``family`` (a single-instrument strategy key, ``portfolio/<key>`` or ``xs<top>/<key>``), ``years``,
+            ``trend`` (the planted edge; the size premium for the size rule) and ``seed``.
 
     Returns:
-        A ``BarSubject`` on synthetic bars, or a ``PanelSubject`` on a synthetic eight-asset panel for a
-        portfolio family.
+        A ``BarSubject`` on synthetic bars, a ``PanelSubject`` on a synthetic eight-asset panel for a portfolio
+        family, or one on a synthetic crypto cross-section for a cross-sectional family.
     """
+    if task["family"].startswith("xs"):
+        panel = xs_panel(task["family"], task["years"], task["trend"], task["seed"])
+        return PanelSubject(panel, _xs_parts(task["family"])[1], panel.ts[-1] + pd.Timedelta(days=1),
+                            f"synthetic_crypto{_xs_parts(task['family'])[0]}")
     if task["family"].startswith("portfolio/"):
         panel = synthetic_panel(task["years"], PORTFOLIO_ASSETS, task["trend"], task["seed"])
         return PanelSubject(panel, task["family"].split("/", 1)[1], panel.ts[-1] + pd.Timedelta(days=1),
@@ -269,6 +370,8 @@ def run_calibration(
     base_seed: int = 1_000,
     portfolio_reps: int = 40,
     portfolio_power_reps: int = 20,
+    xs_reps: int = 0,
+    xs_power_reps: int = 15,
 ) -> dict[str, Any]:
     """Run the calibration study and save its report.
 
@@ -287,6 +390,8 @@ def run_calibration(
         base_seed: First market seed; run ``i`` uses ``base_seed + i + 1``.
         portfolio_reps: Noise runs per portfolio family and researcher type (0 skips portfolios).
         portfolio_power_reps: Planted-trend runs per portfolio family, edge size and history length.
+        xs_reps: Noise runs per cross-sectional crypto family, universe size and researcher type (0 skips them).
+        xs_power_reps: Planted-edge runs per cross-sectional power family, edge size and history length.
 
     Returns:
         The report: ``id``, ``created_at``, ``thresholds_version``, ``settings``, ``noise``, ``power``,
@@ -298,15 +403,17 @@ def run_calibration(
     run_id = uuid.uuid4().hex[:8]
 
     # Find the trend size that gives each target edge for the default trend rule (edge grows with trend).
-    sizes = {}
-    for target in edges:
-        lo, hi = 0.0, 1.0
-        for _ in range(10):
-            mid = (lo + hi) / 2
-            lo, hi = (mid, hi) if true_edge("trend_sma", mid) < target else (lo, mid)
-        sizes[target] = round((lo + hi) / 2, 4)
-    truth = {(f, t): true_edge(f, sizes[t]) for f in POWER_FAMILIES for t in edges}
-    log(f"planted trend sizes {sizes}; true edges {({f'{k[0]}@{k[1]}': round(v, 2) for k, v in truth.items()})}")
+    sizes: dict[float, float] = {}
+    truth: dict[tuple[str, float], float] = {}
+    if power_reps:
+        for target in edges:
+            lo, hi = 0.0, 1.0
+            for _ in range(10):
+                mid = (lo + hi) / 2
+                lo, hi = (mid, hi) if true_edge("trend_sma", mid) < target else (lo, mid)
+            sizes[target] = round((lo + hi) / 2, 4)
+        truth = {(f, t): true_edge(f, sizes[t]) for f in POWER_FAMILIES for t in edges}
+        log(f"planted trend sizes {sizes}; true edges {({f'{k[0]}@{k[1]}': round(v, 2) for k, v in truth.items()})}")
     p_sizes: dict[float, float] = {}
     if portfolio_reps:
         for target in edges:
@@ -349,8 +456,33 @@ def run_calibration(
 
     runs: list[dict[str, Any]] = []
     n_workers = workers or max(1, (os.cpu_count() or 2) - 1)
-    log(f"{len(tasks)} gauntlet runs on {n_workers} processes")
+    x_sizes: dict[str, dict[float, float]] = {}
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        if xs_reps:
+            for key in XS_POWER:
+                fam = f"xs30/{key}"
+                x_sizes[fam] = xs_sizes(fam, edges, pool)
+                truth.update({(fam, t): v for (_, x), v in
+                              xs_true_edges([(fam, x_sizes[fam][t]) for t in edges], pool).items()
+                              for t in edges if x == x_sizes[fam][t]})
+            log(f"cross-sectional planted sizes {x_sizes}; true edges "
+                f"{({f'{k[0]}@{k[1]}': round(v, 2) for k, v in truth.items() if k[0].startswith('xs')})}")
+            for top in XS_COINS:
+                for key in XS_STRATEGIES:
+                    for scenario in ("noise_fixed", "noise_tuned"):
+                        for _ in range(xs_reps):
+                            seed += 1
+                            tasks.append({"scenario": scenario, "family": f"xs{top}/{key}", "years": XS_YEARS,
+                                          "trend": 0.0, "seed": seed, "th": th})
+            for fam, by_target in x_sizes.items():
+                for target in edges:
+                    for y in (4.0, XS_YEARS):
+                        for _ in range(xs_power_reps):
+                            seed += 1
+                            tasks.append({"scenario": "power", "family": fam, "years": y, "trend": by_target[target],
+                                          "target": target, "true_edge": truth[(fam, target)], "seed": seed,
+                                          "th": th})
+        log(f"{len(tasks)} gauntlet runs on {n_workers} processes")
         futures = [pool.submit(_one, t) for t in tasks]
         for i, fut in enumerate(as_completed(futures), 1):
             runs.append(fut.result())
@@ -375,6 +507,8 @@ def run_calibration(
                      "trend_sizes": {str(k): v for k, v in sizes.items()},
                      "portfolio_trend_sizes": {str(k): v for k, v in p_sizes.items()},
                      "portfolio_reps": portfolio_reps, "portfolio_power_reps": portfolio_power_reps,
+                     "xs_reps": xs_reps, "xs_power_reps": xs_power_reps,
+                     "xs_planted_sizes": {f: {str(k): v for k, v in d.items()} for f, d in x_sizes.items()},
                      "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed,
                      "code": code},
         **summarise(runs, th),
@@ -413,10 +547,14 @@ def headline(report: dict[str, Any]) -> str:
         return "; ".join(f"{p['years']:g} y at edge {p['true_edge']:.2f}: {p['rate']:.0%}" for p in rows)
 
     text = (f"Noise passes {k / max(n, 1):.1%} of the time (95% CI {lo:.1%}–{hi:.1%}, {n} runs"
-            + (f"; worst family {worst['family']} {worst['rate']:.0%}" if worst else "") + "). "
-            f"Single-instrument trend rule detects a planted edge — {curve('trend_sma')}.")
+            + (f"; worst family {worst['family']} {worst['rate']:.0%}" if worst else "") + ").")
+    if any(p["family"] == "trend_sma" for p in report["power"]):
+        text += f" Single-instrument trend rule detects a planted edge — {curve('trend_sma')}."
     if any(p["family"].startswith("portfolio/") for p in report["power"]):
         text += f" Portfolio trend (8 assets) — {curve('portfolio/tsmom')}."
+    if any(p["family"].startswith("xs") for p in report["power"]):
+        text += (f" Crypto momentum (top 30) — {curve('xs30/xs_weekly_momentum')}."
+                 f" Crypto size (top 30) — {curve('xs30/xs_small_size')}.")
     return text
 
 

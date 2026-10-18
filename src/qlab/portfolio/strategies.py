@@ -7,6 +7,13 @@ open. Weights are fractions of equity; their absolute sum is gross exposure.
 Every rule rebalances on a fixed schedule (every ``rebalance`` trading days from the start of the panel) and
 holds its weights in between, which keeps turnover and costs realistic. Volatility targeting uses an ex-ante
 estimate: today's weights applied to the past ``vol_lookback`` days of returns.
+
+The cross-sectional rules (``xs_*``, M3c) are built for dynamic panels, where coins enter and leave: each
+rebalance ranks only that day's members with a usable signal and holds the best (or worst) fraction in equal
+weights. They are the long legs of the published crypto factors (Liu, Tsyvinski & Wu, 2022; Zaremba et al.,
+2021), long-only because the lab trades spot. Equal weights replace the papers' value weights, because the
+archive has no market capitalisations. Signals that need a window need a bar on every day of it, so a coin back
+from a halt or just listed waits a full window.
 """
 
 from __future__ import annotations
@@ -288,7 +295,118 @@ def vol_managed(panel: Panel, vol_lookback: int = 21, target_vol: float = 0.10, 
     return _hold(_scale(equal_weight(panel), r, target_vol, vol_lookback, panel.dpy), rebalance)
 
 
+MIN_NAMES = 5  # fewest ranked members a cross-sectional rule needs to form a bucket
+
+
+def _bucket(panel: Panel, score: np.ndarray, quantile: float, lowest: bool) -> np.ndarray:
+    """Equal weights in the members with the highest (or lowest) score, a ``quantile`` share of them.
+
+    Args:
+        panel: Price panel with membership.
+        score: Signal per date and instrument, ``(T, N)``; NaN where it can't be computed.
+        quantile: Share of the ranked members held, e.g. 0.2 for a quintile; at least one is held.
+        lowest: Hold the lowest scores instead of the highest.
+
+    Returns:
+        Weights ``(T, N)`` summing to 1 on each date; NaN rows where fewer than ``MIN_NAMES`` members have a score.
+    """
+    ok = panel.member & np.isfinite(score)
+    ranks = pd.DataFrame(np.where(ok, score, np.nan)).rank(axis=1, ascending=lowest, method="first").to_numpy()
+    n_ok = ok.sum(axis=1)
+    k = np.maximum(1, np.round(quantile * n_ok)).astype(int)[:, None]
+    w = np.where(ok & (ranks <= k), 1.0 / k, 0.0)
+    w[n_ok < MIN_NAMES] = np.nan
+    return w
+
+
+def _window_sum(x: np.ndarray, window: int) -> np.ndarray:
+    """Rolling sum over ``window`` rows that is NaN unless every row in the window is finite.
+
+    Args:
+        x: ``(T, N)``.
+        window: Rows.
+
+    Returns:
+        ``(T, N)``.
+    """
+    return pd.DataFrame(x).rolling(window, min_periods=window).sum().to_numpy()
+
+
+def xs_weekly_momentum(panel: Panel, lookback: int = 21, skip: int = 0, quantile: float = 0.2,
+                       rebalance: int = 7) -> np.ndarray:
+    """Hold the members with the highest return over the past three weeks (Liu, Tsyvinski & Wu, 2022, r(3,0)).
+
+    Args:
+        panel: Price panel with membership.
+        lookback: Return window, days back from the decision.
+        skip: Most recent days left out of the window.
+        quantile: Share of members held.
+        rebalance: Days between rebalances.
+
+    Returns:
+        Long-only weights ``(T, N)``.
+    """
+    lr = panel.log_returns()
+    past = _window_sum(lr, max(lookback - skip, 1))
+    if skip:
+        past = np.vstack([np.full((skip, panel.n), np.nan), past[:-skip]])
+    return _hold(_bucket(panel, past, quantile, lowest=False), rebalance)
+
+
+def xs_reversal(panel: Panel, lookback: int = 1, quantile: float = 0.2, rebalance: int = 1) -> np.ndarray:
+    """Hold the members with the lowest return over the last ``lookback`` days: short-term reversal (Zaremba et
+    al., 2021, who find that yesterday's crypto losers beat yesterday's winners, except among the largest coins).
+
+    Args:
+        panel: Price panel with membership.
+        lookback: Return window, days.
+        quantile: Share of members held.
+        rebalance: Days between rebalances.
+
+    Returns:
+        Long-only weights ``(T, N)``.
+    """
+    return _hold(_bucket(panel, _window_sum(panel.log_returns(), lookback), quantile, lowest=True), rebalance)
+
+
+def xs_low_vol(panel: Panel, lookback: int = 7, quantile: float = 0.2, rebalance: int = 7) -> np.ndarray:
+    """Hold the members whose daily returns varied least over the past week (RETVOL in Liu, Tsyvinski & Wu, 2022,
+    who found its long-short spread insignificant; Burggraf & Rudolf, 2021, find no low-volatility premium).
+
+    Args:
+        panel: Price panel with membership.
+        lookback: Volatility window, days.
+        quantile: Share of members held.
+        rebalance: Days between rebalances.
+
+    Returns:
+        Long-only weights ``(T, N)``.
+    """
+    vol = pd.DataFrame(panel.log_returns()).rolling(lookback, min_periods=lookback).std().to_numpy()
+    return _hold(_bucket(panel, vol, quantile, lowest=True), rebalance)
+
+
+def xs_small_size(panel: Panel, lookback: int = 7, quantile: float = 0.2, rebalance: int = 7) -> np.ndarray:
+    """Hold the members with the least dollar volume over the past week (PRCVOL in Liu, Tsyvinski & Wu, 2022, a
+    size proxy: small coins trade less; the archive has no market capitalisations).
+
+    Args:
+        panel: Price panel with membership and dollar volume.
+        lookback: Volume window, days.
+        quantile: Share of members held.
+        rebalance: Days between rebalances.
+
+    Returns:
+        Long-only weights ``(T, N)``.
+    """
+    dv = pd.DataFrame(np.where(panel.avail, panel.dollar_volume, np.nan))
+    size = dv.rolling(lookback, min_periods=lookback).mean().to_numpy()
+    return _hold(_bucket(panel, size, quantile, lowest=True), rebalance)
+
+
 VOL = Param(0.10, 0.05, 0.20, 0.05, "Annual volatility target")
+QUANTILE = Param(0.2, 0.1, 0.5, 0.1, "Share of members held (0.2 = a quintile)")
+WEEKS = Param(7, 7, 28, 7, "Days between rebalances")
 
 REGISTRY: dict[str, PortfolioStrategy] = {
     s.name: s
@@ -341,6 +459,43 @@ REGISTRY: dict[str, PortfolioStrategy] = {
             {"vol_lookback": Param(21, 7, 126, 7, "Volatility window, days"), "target_vol": VOL,
              "rebalance": Param(5, 1, 21, 2, "Days between rebalances")},
             "Moreira & Muir (2017); Harvey et al. (2018)",
+        ),
+        PortfolioStrategy(
+            "xs_weekly_momentum", "xs_weekly_momentum",
+            "Hold the fifth of the universe that rose most over the past three weeks, rebalanced weekly: the "
+            "long leg of the crypto momentum factor.",
+            xs_weekly_momentum,
+            {"lookback": Param(21, 7, 56, 7, "Return window, days"),
+             "skip": Param(0, 0, 14, 7, "Recent days skipped"),
+             "quantile": QUANTILE, "rebalance": WEEKS},
+            "Liu, Tsyvinski & Wu (2022), Common Risk Factors in Cryptocurrency, J. Finance 77(2)",
+            kind="dynamic",
+        ),
+        PortfolioStrategy(
+            "xs_reversal", "xs_reversal",
+            "Hold the fifth of the universe that fell most yesterday, rebalanced daily: short-term reversal.",
+            xs_reversal,
+            {"lookback": Param(1, 1, 7, 1, "Return window, days"), "quantile": QUANTILE,
+             "rebalance": Param(1, 1, 7, 1, "Days between rebalances")},
+            "Zaremba, Bilgin, Long, Mercik & Szczygielski (2021), Int. Rev. Financial Analysis 78",
+            kind="dynamic",
+        ),
+        PortfolioStrategy(
+            "xs_low_vol", "xs_low_vol",
+            "Hold the fifth of the universe whose daily returns varied least over the past week, rebalanced weekly.",
+            xs_low_vol,
+            {"lookback": Param(7, 7, 63, 7, "Volatility window, days"), "quantile": QUANTILE, "rebalance": WEEKS},
+            "Liu, Tsyvinski & Wu (2022), RETVOL; Burggraf & Rudolf (2021), Finance Research Letters 40",
+            kind="dynamic",
+        ),
+        PortfolioStrategy(
+            "xs_small_size", "xs_small_size",
+            "Hold the fifth of the universe with the least dollar volume over the past week, rebalanced weekly: "
+            "the long leg of the size factor, with dollar volume standing in for market capitalisation.",
+            xs_small_size,
+            {"lookback": Param(7, 7, 63, 7, "Volume window, days"), "quantile": QUANTILE, "rebalance": WEEKS},
+            "Liu, Tsyvinski & Wu (2022), PRCVOL and the size factor",
+            kind="dynamic",
         ),
     ]
 }

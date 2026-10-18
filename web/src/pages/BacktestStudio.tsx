@@ -355,7 +355,7 @@ export function BacktestStudio() {
               empty="No runs yet."
               columns={[
                 { key: 'when', label: 'When', sort: (t) => t.created_at, render: (t) => <span className="num">{utc(t.created_at).slice(5)}</span> },
-                { key: 'q', label: 'Question', sort: (t) => t.question },
+                { key: 'question', label: 'Question', sort: (t) => t.question },
                 { key: 'p', label: 'Params', render: (t) => <span className="faint num">{Object.entries(t.params).map(([k, v]) => `${k}=${v}`).join(' ')}</span> },
                 { key: 'sharpe', label: 'Sharpe', align: 'right', sort: (t) => t.sharpe, render: (t) => num(t.sharpe) },
                 { key: 'cagr', label: 'CAGR', align: 'right', sort: (t) => t.cagr, render: (t) => <span className={tone(t.cagr)}>{pct(t.cagr, 1, true)}</span> },

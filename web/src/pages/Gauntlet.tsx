@@ -310,7 +310,7 @@ export function Gauntlet() {
                 empty="No report cards yet. Judge a candidate on the left."
                 columns={[
                   { key: 'when', label: 'When', sort: (c) => c.created_at, render: (c) => <span className="num">{utc(c.created_at).slice(5, 16)}</span> },
-                  { key: 'q', label: 'Question', sort: (c) => c.question },
+                  { key: 'question', label: 'Question', sort: (c) => c.question },
                   { key: 'p', label: 'Params', render: (c) => <span className="faint num">{Object.entries(c.params).map(([k, v]) => `${k}=${v}`).join(' ')}</span> },
                   { key: 'v', label: 'Verdict', sort: (c) => c.verdict, render: (c) => <VerdictBadge verdict={c.verdict} /> },
                   {

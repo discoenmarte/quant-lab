@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -203,3 +204,25 @@ def dumps(obj: Any) -> str:
         A JSON string with sorted keys, so equal inputs give equal strings.
     """
     return json.dumps(obj, default=str, sort_keys=True)
+
+
+def json_safe(obj: Any) -> Any:
+    """Make a value strict-JSON safe: NaN and infinity become None, numpy scalars become Python numbers.
+
+    Browsers reject NaN in JSON, and missing values are common in reports (no PBO without parameters).
+
+    Args:
+        obj: Nested dicts, lists, tuples and scalars.
+
+    Returns:
+        The same structure with only JSON-native values.
+    """
+    if isinstance(obj, dict):
+        return {str(k): json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list | tuple):
+        return [json_safe(v) for v in obj]
+    if hasattr(obj, "item") and callable(obj.item) and getattr(obj, "shape", None) == ():
+        obj = obj.item()  # numpy scalar
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    return obj

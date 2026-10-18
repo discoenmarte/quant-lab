@@ -177,11 +177,10 @@ December 2022 delisting, BTTUSDT through January 2022), so a survivorship-free c
   catches breaks and large decay, not small ones (decision 0007 §5).
 - **Replay check** (scratch lab, real bars 2026-08-28 to 2026-10-16 fed one day at a time): 34 forward days for both
   trend-filter cards and risk parity, every decision 11.5 to 59.5 hours before its open, all inside their bands.
-- **Not yet started on the real lab.** The owner's `qlab serve` held the database during M7a, and it runs the old
-  code. To start the clock: restart `qlab serve`, then on the Trading Desk add `9f757395ca74`
-  (trend_filter:all_etfs) and `c1c207ae352d` (trend_filter:asset_classes_long) and click "Run today's decisions";
-  or stop the server and run `uv run qlab paper add 9f757395ca74 c1c207ae352d --note "..."` and
-  `uv run qlab paper run`. Then `make paper-launchd` and follow the printed steps.
+- **Started on the real lab on 2026-10-18:** entries `922c0528e008` (trend_filter:all_etfs, card `9f757395ca74`)
+  and `ded5af67de61` (trend_filter:asset_classes_long, card `c1c207ae352d`), both rejected near-misses. First
+  decisions on the 2026-10-16 close, recorded 19.7 hours before the 2026-10-19 open (gross 71% and 43%).
+  Keep it running: `make paper-nightly` after each US close, or `make paper-launchd` and follow the printed steps.
 
 
 ### M1: data lake (done; kept for reference)

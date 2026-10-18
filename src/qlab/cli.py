@@ -1,5 +1,5 @@
 """Command line entry point: ``qlab serve | init | ingest | backtest | portfolio | gauntlet | portfolio-gauntlet |
-calibrate | bench | demo``.
+calibrate | bench | demo | paper``.
 
 More commands arrive with each milestone (inbox, mine).
 """
@@ -300,6 +300,88 @@ def demo() -> None:
     from .api.routes_core import run_demo
 
     typer.echo(json.dumps(run_demo(), indent=2, default=str))
+
+
+paper_app = typer.Typer(help="Forward paper book: record each day's targets before the outcome, then score them",
+                        no_args_is_help=True)
+app.add_typer(paper_app, name="paper")
+
+
+@paper_app.command("add")
+def paper_add(
+    cards: list[str] = typer.Argument(..., help="Gauntlet report card ids (any verdict)"),
+    note: str = typer.Option("", help="Why these cards are tracked"),
+) -> None:
+    """Put report cards in the paper book and freeze what their research periods expect.
+
+    Args:
+        cards: Card ids.
+        note: Reason, recorded with each entry.
+    """
+    from .paper import book
+
+    for card_id in cards:
+        try:
+            e = book.add(card_id, note, actor="cli")
+        except (book.Refused, FileNotFoundError) as err:
+            typer.echo(f"{card_id}: not added: {err}")
+            continue
+        ref = e["reference"]
+        typer.echo(f"{card_id}: entry {e['entry_id']} for {e['question']} ({e['verdict']}), research edge Sharpe "
+                   f"{ref['edge_sharpe']:.2f}, beta {ref['beta']:.2f}")
+
+
+@paper_app.command("run")
+def paper_run() -> None:
+    """Decide every active entry for the latest final close. Safe to repeat; backfills are refused."""
+    from .paper import book
+
+    results = book.run(actor="cli")
+    for r in results:
+        typer.echo(f"  [{r['status']:<8}] {r['question']:<34} {r['message']}")
+    typer.echo(f"{sum(r['status'] == 'decided' for r in results)} decided, "
+               f"{sum(r['status'] == 'exists' for r in results)} already decided, "
+               f"{sum(r['status'] in ('refused', 'error') for r in results)} refused or failed")
+
+
+@paper_app.command("score")
+def paper_score() -> None:
+    """Replay every entry's decisions on the bars after them and compare with the research expectations."""
+    from .paper import score
+
+    for r in score.score(actor="cli"):
+        if r["status"] != "scored":
+            typer.echo(f"  [error   ] {r['question']:<34} {r['message']}")
+            continue
+        edge = "–" if r["forward_edge_sharpe"] is None else f"{r['forward_edge_sharpe']:+.2f}"
+        typer.echo(f"  [{'ALARM' if r['alarm'] else 'scored':<8}] {r['question']:<34} {r['message']}, forward edge "
+                   f"Sharpe {edge} ({r['band'] or 'no band yet'})")
+
+
+@paper_app.command("list")
+def paper_list() -> None:
+    """Show the book: every entry, its status and its latest decision."""
+    from .paper import book
+
+    for e in book.entries():
+        decs = book.decisions(e["entry_id"])
+        last = f"last decision {decs[-1]['as_of']}" if decs else "no decision yet"
+        typer.echo(f"  {e['entry_id']}  {e['status']:<8} {e['question']:<34} card {e['card_id']} ({e['verdict']}), "
+                   f"{len(decs)} decisions, {last}")
+
+
+@paper_app.command("retire")
+def paper_retire(entry_id: str, reason: str = typer.Option(..., help="Why the entry stops")) -> None:
+    """Stop an entry: no new decisions, scoring ends now, its record stays.
+
+    Args:
+        entry_id: Entry id.
+        reason: Why, recorded in the audit log.
+    """
+    from .paper import book
+
+    e = book.retire(entry_id, reason, actor="cli")
+    typer.echo(f"{entry_id}: retired at {e['retired_at']}")
 
 
 if __name__ == "__main__":

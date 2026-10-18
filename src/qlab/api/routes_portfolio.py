@@ -36,10 +36,11 @@ class PortfolioRequest(BaseModel):
 
 @router.get("/universes")
 def universes() -> list[dict[str, Any]]:
-    """Named universes with their instruments and first common date.
+    """Named universes with their instruments and first date.
 
     Returns:
-        ``name, description, members, first, n_days`` per universe.
+        ``name, description, kind, members, top, n_instruments, n_delisted, first, n_days`` per universe (see
+        ``portfolio.runner.universes``).
     """
     return runner.universes()
 
@@ -49,10 +50,11 @@ def strategies() -> list[dict[str, Any]]:
     """Every portfolio strategy with its parameters.
 
     Returns:
-        ``name, family, description, reference`` and ``params`` (default, low, high, step, doc, is_int).
+        ``name, family, description, reference, kind`` (``static``, ``dynamic`` or ``any``: which universes it
+        fits) and ``params`` (default, low, high, step, doc, is_int).
     """
     return [
-        {"name": s.name, "family": s.family, "description": s.description, "reference": s.reference,
+        {"name": s.name, "family": s.family, "description": s.description, "reference": s.reference, "kind": s.kind,
          "params": {k: {**p.__dict__, "is_int": p.is_int} for k, p in s.params.items()}}
         for s in REGISTRY.values()
     ]
@@ -69,7 +71,8 @@ def run(req: PortfolioRequest) -> dict[str, Any]:
         The report (see ``portfolio.runner.report``).
 
     Raises:
-        HTTPException: 404 for an unknown universe, strategy or missing data; 400 for an empty period.
+        HTTPException: 404 for an unknown universe, strategy or missing data; 400 for an empty period or a strategy
+            built for the other kind of universe.
     """
     if req.strategy not in REGISTRY:
         raise HTTPException(status_code=404, detail=f"unknown strategy {req.strategy}")

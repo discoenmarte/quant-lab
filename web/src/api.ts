@@ -172,6 +172,8 @@ export interface StrategyDef {
   description: string;
   reference: string;
   params: Record<string, ParamDef>;
+  /** Portfolio strategies only: the universes it fits (``static``, ``dynamic`` or ``any``). */
+  kind?: 'static' | 'dynamic' | 'any';
 }
 
 export interface Instrument {
@@ -411,10 +413,30 @@ export interface LedgerCounts {
 export interface PortfolioUniverse {
   name: string;
   description: string;
+  /** ``static``: fixed members that all trade every day; ``dynamic``: point-in-time top N by dollar volume. */
+  kind: 'static' | 'dynamic';
+  /** A static universe's instruments; empty for a dynamic one. */
   members: string[];
-  /** First date every member has a bar; null when something isn't ingested. */
+  /** Members per date of a dynamic universe; null for a static one. */
+  top: number | null;
+  /** Instruments that are ever members. */
+  n_instruments: number | null;
+  /** Instruments whose last bar is before the panel's last date (delisted or halted). */
+  n_delisted: number | null;
+  /** First date of the panel; null when something isn't ingested. */
   first: string | null;
   n_days: number;
+}
+
+/** How a portfolio report's universe behaves over time. */
+export interface UniverseStats {
+  kind: 'static' | 'dynamic';
+  top: number | null;
+  n_instruments: number;
+  n_delisted: number;
+  /** Members per point of ``time``. */
+  members: number[];
+  time: number[];
 }
 
 export interface PortfolioReport {
@@ -440,6 +462,8 @@ export interface PortfolioReport {
   contribution: Record<string, number>;
   monthly: { year: number; month: number; ret: number }[];
   costs: { per_year: number; cash_per_year: number; turnover_per_year: number };
+  /** Membership over time; absent in reports saved before M3c. */
+  universe?: UniverseStats;
 }
 
 /** One decision of the paper book: the target an entry decided at one close, before the next bar existed. */

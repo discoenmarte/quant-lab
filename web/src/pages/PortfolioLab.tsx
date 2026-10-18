@@ -102,6 +102,36 @@ function weightsOption(r: PortfolioReport): EChartsOption {
 }
 
 /**
+ * Members of a dynamic universe per date, a step line.
+ *
+ * @param u - Universe statistics from the report.
+ * @returns ECharts option.
+ */
+function membersOption(u: NonNullable<PortfolioReport['universe']>): EChartsOption {
+  return {
+    animation: false,
+    tooltip: { trigger: 'axis' },
+    grid: { left: 40, right: 16, top: 10, bottom: 22 },
+    xAxis: { type: 'time', axisLabel: { color: AXIS }, splitLine: { show: false } },
+    yAxis: { type: 'value', min: 0, axisLabel: { color: AXIS }, splitLine: { lineStyle: { color: GRID_LINE } } },
+    series: [{ type: 'line', step: 'end', showSymbol: false, data: u.time.map((x, i) => [x * 1000, u.members[i]]),
+      lineStyle: { width: 1.2, color: '#a78bfa' }, areaStyle: { color: 'rgba(167,139,250,0.15)' } }],
+  };
+}
+
+/**
+ * Whether a portfolio strategy fits a universe: static rules need members that all trade every day, cross-sectional
+ * rules need point-in-time members.
+ *
+ * @param s - Strategy.
+ * @param u - Universe.
+ * @returns True when the strategy can run on the universe.
+ */
+function fits(s: StrategyDef, u: PortfolioUniverse | undefined): boolean {
+  return !u || !s.kind || s.kind === 'any' || s.kind === u.kind;
+}
+
+/**
  * Horizontal bars per instrument, e.g. today's weights or yearly contributions.
  *
  * @param values - Instrument to value.
@@ -125,6 +155,27 @@ function barsOption(values: Record<string, number>, asPercent = true): EChartsOp
 }
 
 /**
+ * Height for a bar chart with one bar per entry.
+ *
+ * @param values - Bars.
+ * @returns Pixels.
+ */
+function barsHeight(values: Record<string, number>): number {
+  return Math.max(160, Object.keys(values).length * 22 + 30);
+}
+
+/**
+ * The entries with the largest absolute values, for charts of hundreds of instruments.
+ *
+ * @param values - Instrument to value.
+ * @param n - Entries to keep.
+ * @returns At most ``n`` entries.
+ */
+function topBars(values: Record<string, number>, n: number): Record<string, number> {
+  return Object.fromEntries(Object.entries(values).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, n));
+}
+
+/**
  * Portfolio Lab: pick a universe and a diversified strategy, run it against equal weight with realistic costs,
  * read the report, and send it to the gauntlet. Every run is a ledger trial.
  */
@@ -143,10 +194,15 @@ export function PortfolioLab() {
 
   const strat = strategies.data?.find((s) => s.name === stratName);
   const uni = universes.data?.find((u) => u.name === universe);
+  const choices = (strategies.data ?? []).filter((st) => fits(st, uni));
 
   useEffect(() => {
     if (strat) setParams(Object.fromEntries(Object.entries(strat.params).map(([k, p]) => [k, p.default])));
   }, [strat]);
+
+  useEffect(() => {
+    if (strat && uni && !fits(strat, uni) && choices.length) setStratName(choices[0].name);
+  }, [strat, uni, choices]);
 
   async function runIt() {
     setBusy('run');
@@ -189,7 +245,10 @@ export function PortfolioLab() {
     <div className="page">
       <div className="page-head">
         <h1>Portfolio Lab</h1>
-        <span className="muted">Diversified rules across asset classes, judged against equal weight of the same funds.</span>
+        <span className="muted">
+          Diversified rules across asset classes, and cross-sectional rules on the crypto universe, judged against equal
+          weight of the same instruments.
+        </span>
       </div>
       <div className="studio">
         <div className="stack">
@@ -200,20 +259,30 @@ export function PortfolioLab() {
                 <select value={universe} onChange={(e) => setUniverse(e.target.value)}>
                   {(universes.data ?? []).map((u) => (
                     <option key={u.name} value={u.name} disabled={!u.first}>
-                      {u.name} ({u.members.length}{u.first ? `, from ${u.first.slice(0, 4)}` : ', not ingested'})
+                      {u.name} ({u.kind === 'dynamic' ? `top ${u.top}` : u.members.length}
+                      {u.first ? `, from ${u.first.slice(0, 4)}` : ', not ingested'})
                     </option>
                   ))}
                 </select>
               </label>
               {uni && (
                 <p className="muted small">
-                  {uni.description} <span className="faint">{uni.members.join(' · ')}</span>
+                  {uni.description}{' '}
+                  {uni.kind === 'dynamic' ? (
+                    <span className="faint">
+                      {uni.n_instruments ?? '–'} pairs are members at some point; {uni.n_delisted ?? '–'} of them stop
+                      trading before the last date. Positions drift between rebalances, and a delisted coin is sold
+                      at its last close (optimistic).
+                    </span>
+                  ) : (
+                    <span className="faint">{uni.members.join(' · ')}</span>
+                  )}
                 </p>
               )}
               <label className="field">
                 Strategy
                 <select value={stratName} onChange={(e) => setStratName(e.target.value)}>
-                  {(strategies.data ?? []).map((st) => <option key={st.name} value={st.name}>{st.name}</option>)}
+                  {choices.map((st) => <option key={st.name} value={st.name}>{st.name}</option>)}
                 </select>
               </label>
               {strat && (
@@ -266,7 +335,10 @@ export function PortfolioLab() {
             <>
               <div className="note">
                 Trial <b className="num">{report.meta.trial_id}</b> on <b>{report.meta.question}</b> ·{' '}
-                <b>N = {report.meta.n_trials}</b> · {report.meta.start} → {report.meta.end} · {report.meta.symbols.length} instruments.{' '}
+                <b>N = {report.meta.n_trials}</b> · {report.meta.start} → {report.meta.end} ·{' '}
+                {report.universe?.kind === 'dynamic'
+                  ? `top ${report.universe.top} of ${report.universe.n_instruments} pairs (${report.universe.n_delisted} stop trading)`
+                  : `${report.meta.symbols.length} instruments`}.{' '}
                 {report.meta.lockbox.included ? (
                   <b className="warn">This run reached into the lockbox; it is spent for this question.</b>
                 ) : (
@@ -286,13 +358,21 @@ export function PortfolioLab() {
               </Card>
               <Card title="Weights over time">
                 <EChart option={weightsOption(report)} height={300} />
+                {report.universe?.kind === 'dynamic' && (
+                  <p className="faint small">The 25 largest holdings; everything else held is summed as “other”.</p>
+                )}
               </Card>
+              {report.universe?.kind === 'dynamic' && (
+                <Card title="Members per day">
+                  <EChart option={membersOption(report.universe)} height={160} />
+                </Card>
+              )}
               <div className="grid cols-2">
                 <Card title={`Weights on ${report.meta.end}`}>
-                  <EChart option={barsOption(report.latest)} height={Math.max(160, report.meta.symbols.length * 22 + 30)} />
+                  <EChart option={barsOption(report.latest)} height={barsHeight(report.latest)} />
                 </Card>
-                <Card title="Return contributed per year">
-                  <EChart option={barsOption(report.contribution)} height={Math.max(160, report.meta.symbols.length * 22 + 30)} />
+                <Card title={Object.keys(report.contribution).length > 30 ? 'Return contributed per year (30 largest)' : 'Return contributed per year'}>
+                  <EChart option={barsOption(topBars(report.contribution, 30))} height={barsHeight(topBars(report.contribution, 30))} />
                   <p className="faint small">
                     Costs {pct(-report.costs.per_year, 2)}/yr · cash interest {pct(report.costs.cash_per_year, 2, true)}/yr ·
                     turnover {num(report.costs.turnover_per_year, 1)}/yr

@@ -145,7 +145,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .infotip:hover .infotip-body, .infotip:focus .infotip-body { display: flex; }
 
 /* Milestones */
-.milestones { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 8px; }
+.milestones { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 8px; }
 .milestone { border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; background: var(--panel-2); }
 .milestone .ms-id { font-weight: 700; }
 .milestone.done { border-color: rgba(52, 211, 153, 0.45); }

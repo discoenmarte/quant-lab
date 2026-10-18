@@ -1,5 +1,5 @@
 # quant-lab developer commands. `make help` lists them.
-.PHONY: help setup test lint build serve dev-api dev-web demo
+.PHONY: help setup test lint build serve dev-api dev-web demo paper-nightly paper-launchd
 
 help: ## List the commands
 	@grep -E '^[a-z-]+:.*## ' Makefile | sed 's/:.*## /\t/'
@@ -28,3 +28,9 @@ dev-web: ## Web app with hot reload on :5173 (needs dev-api running)
 
 demo: ## Run the demo pipeline once from the command line
 	uv run qlab demo
+
+paper-nightly: ## Ingest, record the paper book's decisions for the latest close, and score it (once, now)
+	uv run qlab paper nightly
+
+paper-launchd: ## Write the nightly paper job as a launchd plist and print the install steps (installs nothing)
+	uv run qlab paper launchd $(if $(HOUR),--hour $(HOUR) --minute $(or $(MINUTE),0),)

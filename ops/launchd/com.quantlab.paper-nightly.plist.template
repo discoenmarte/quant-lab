@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template for the nightly paper-book job (M7a). Not installed by the lab: `make paper-launchd` fills in the
+  placeholders for this checkout, writes the result under data/ops/, and prints the install steps.
+
+  What it runs: `qlab paper nightly` (ingest the free sources, record each entry's targets for the latest close,
+  score the book). It talks to a running `qlab serve` through the API when one is up, so the two never fight over
+  the database. Paper only: nothing in the job can place an order.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__UV__</string>
+    <string>run</string>
+    <string>--project</string>
+    <string>__REPO__</string>
+    <string>qlab</string>
+    <string>paper</string>
+    <string>nightly</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <!-- Local time. A run missed while the Mac sleeps happens once on wake. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>__HOUR__</integer>
+    <key>Minute</key>
+    <integer>__MINUTE__</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

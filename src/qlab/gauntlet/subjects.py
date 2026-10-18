@@ -27,7 +27,7 @@ from ..data.ingest import SOURCES
 from ..portfolio import leakage as panel_leakage
 from ..portfolio.engine import run_portfolio
 from ..portfolio.panel import Panel, cost_model_of, load_panel
-from ..portfolio.runner import panel_hash, question_of
+from ..portfolio.runner import check_fit, panel_hash, question_of
 from ..portfolio.strategies import REGISTRY as PORTFOLIOS
 from . import stats
 from .nulls import local_vol, permuter
@@ -291,8 +291,12 @@ class PanelSubject:
             strategy: Key of the portfolio strategy registry.
             sealed_from: First lockbox date.
             universe: Universe name; defaults to the panel's.
+
+        Raises:
+            ValueError: The strategy is built for the other kind of universe (static or dynamic).
         """
         self.strat = PORTFOLIOS[strategy]
+        check_fit(self.strat, panel)
         self.params: dict[str, Param] = self.strat.params
         self.panel, self.sealed, self.dpy = panel, sealed_from, panel.dpy
         name = universe or panel.name
@@ -307,6 +311,8 @@ class PanelSubject:
         self.cost_bps = float(panel.costs.mean() * 1e4)
         self.meta: dict[str, Any] = {"kind": "portfolio", "source": "panel", "symbol": name, "universe": name,
                                      "interval": "1d", "symbols": panel.symbols, "costs": cost_model_of(panel)}
+        # How the permutation stage words its null (see ``permutation``).
+        self.null_note = "null worlds deal each day's moves out again across coins" if panel.dynamic else ""
 
     @classmethod
     def load(cls, universe: str, strategy: str, sealed_from: pd.Timestamp) -> PanelSubject:
@@ -353,14 +359,17 @@ class PanelSubject:
         return panel_leakage.future_shift_check(self.strat, self.research_panel, cfg, seed=seed)
 
     def permutation(self, cfg: dict[str, float], n: int, rng: np.random.Generator) -> tuple[float, np.ndarray]:
-        """Edge Sharpe on the real research panel and on ``n`` shuffles of whole days.
+        """Edge Sharpe on the real research panel and on ``n`` null worlds.
 
-        Days are shuffled together across instruments, which keeps their correlation on each day, and each
-        instrument's moves are rescaled to its own volatility path (see ``nulls``).
+        Static panels: whole days are shuffled together across instruments, which keeps their correlation on
+        each day, and each instrument's moves are rescaled to its own volatility path (see ``nulls``). Dynamic
+        panels: each day's moves are dealt out again across instruments (``cross_sectional_permuter``), which
+        tests what a cross-sectional rule claims: that a coin's own characteristics predict its next move
+        relative to the others (decision 0006).
 
         Args:
             cfg: Parameters.
-            n: Number of shuffles.
+            n: Number of null worlds.
             rng: Random generator.
 
         Returns:
@@ -372,7 +381,7 @@ class PanelSubject:
             res = run_portfolio(panel, self.strat.weights(panel, cfg))
             return _edge_sharpe_annual(res.net, res.benchmark, panel.rf, self.dpy)
 
-        draw = panel_permuter(p)
+        draw = cross_sectional_permuter(p) if p.dynamic else panel_permuter(p)
         return stat(p), np.array([stat(draw(rng)) for _ in range(n)])
 
     def sealed_returns(self, cfg: dict[str, float]) -> dict[str, Any]:
@@ -409,7 +418,8 @@ def panel_permuter(panel: Panel):
 
     Each instrument's overnight gap and open-to-close move are divided by its own local volatility; days are
     shuffled with one permutation for every instrument (keeping same-day co-movement), rescaled to each
-    instrument's volatility where they land, and chained from the first close.
+    instrument's volatility where they land, and chained from the first close. Dynamic panels go through
+    ``masked_permuter``, which keeps the availability mask, dollar volume and membership in place.
 
     Args:
         panel: Research panel.
@@ -417,6 +427,8 @@ def panel_permuter(panel: Panel):
     Returns:
         A function drawing one shuffled panel per call.
     """
+    if panel.dynamic or not panel.avail.all():
+        return masked_permuter(panel)
     o, c = panel.open, panel.close
     gap = np.log(o[1:] / c[:-1])
     body = np.log(c[1:] / o[1:])
@@ -429,6 +441,158 @@ def panel_permuter(panel: Panel):
         opens = c[0] * np.cumprod(g * np.vstack([np.ones((1, panel.n)), b[:-1]]), axis=0)
         closes = opens * b
         return panel.with_prices(np.vstack([o[:1], opens]), np.vstack([c[:1], closes]))
+
+    return draw
+
+
+def masked_permuter(panel: Panel):
+    """Shuffle whole days of a panel whose instruments enter and leave, keeping who trades when in place.
+
+    The null world keeps the calendar of listings, delistings and halts, every instrument's volatility path,
+    its dollar volume and the universe's membership; only the order of the moves is random. A day's move of
+    instrument j (a simple return, see ``_unit_moves``), in units of j's local volatility, is split into the
+    day's cross-sectional mean (the market)
+    and j's residual. All instruments take the market part of the same source day, which keeps same-day
+    co-movement. Each takes its own residual from that day when it traded then, and otherwise from a random
+    day of its own history (an instrument shuffled onto a date before its listing has no move of its own to
+    use). Prices are rebuilt within each run of consecutive bars, starting from the run's real first bar.
+
+    Args:
+        panel: Research panel with an availability mask.
+
+    Returns:
+        ``draw(rng) -> Panel``.
+    """
+    valid, vol, ug, ub, run_start, log_o, log_c = _unit_moves(panel)
+    t_len, n = valid.shape
+    days = np.flatnonzero(valid.any(axis=1))
+    with np.errstate(invalid="ignore"):
+        mg, mb = np.nanmean(ug[days], axis=1), np.nanmean(ub[days], axis=1)
+    eg, eb = ug[days] - mg[:, None], ub[days] - mb[:, None]  # (D, N), NaN where j didn't trade on that day
+    own = [np.flatnonzero(np.isfinite(eg[:, j])) for j in range(n)]
+    counts = np.array([len(x) for x in own])
+    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    pool = np.concatenate(own) if counts.sum() else np.zeros(0, dtype=int)
+
+    def draw(rng: np.random.Generator) -> Panel:
+        src = rng.permutation(len(days))  # target day days[k] takes the moves of source day days[src[k]]
+        e_g, e_b = eg[src], eb[src]
+        missing = ~np.isfinite(e_g) & valid[days]
+        if missing.any():
+            jj = np.nonzero(missing)[1]
+            ok = counts[jj] > 0
+            pick = np.zeros(len(jj), dtype=int)
+            pick[ok] = pool[offsets[jj[ok]] + (rng.random(ok.sum()) * counts[jj[ok]]).astype(int)]
+            e_g[missing] = np.where(ok, eg[pick, jj], 0.0)
+            e_b[missing] = np.where(ok, eb[pick, jj], 0.0)
+        g_new = np.zeros((t_len, n))
+        b_new = np.zeros((t_len, n))
+        g_new[days] = np.where(valid[days], (mg[src, None] + e_g) * vol[days], 0.0)
+        b_new[days] = np.where(valid[days], (mb[src, None] + e_b) * vol[days], 0.0)
+        return _rebuild(panel, valid, g_new, b_new, run_start, log_o, log_c)
+
+    return draw
+
+
+def _unit_moves(panel: Panel) -> tuple[np.ndarray, ...]:
+    """Each instrument's daily moves in units of its own local volatility, for the masked shuffles.
+
+    Moves are simple returns (overnight gap and open-to-close body), not log returns. A log move carries its
+    instrument's volatility drag (about −σ²/2), so handing one from a volatile coin to a calm one would give the
+    calm coin too much drag: in the null worlds calm coins would lose and volatile coins gain on average, and a
+    low-volatility rule with no edge would beat its null 40% of the time (decision 0006). Simple returns keep a
+    coin with zero expected return at zero wherever its moves land.
+
+    Args:
+        panel: Panel with an availability mask.
+
+    Returns:
+        ``(valid, vol, ug, ub, run_start, log_o, log_c)``: return days (a bar today and yesterday), local
+        volatility, unit gaps and bodies (NaN off return days), the first row of each run of bars for every cell,
+        and log prices (zero where there is no bar).
+    """
+    a, o, c = panel.avail, panel.open, panel.close
+    t_len, n = c.shape
+    valid = np.zeros((t_len, n), dtype=bool)
+    valid[1:] = a[1:] & a[:-1]
+    gap = np.zeros((t_len, n))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        gap[1:] = np.where(valid[1:], o[1:] / c[:-1] - 1.0, 0.0)
+        body = np.where(valid, c / o - 1.0, 0.0)
+    vol = np.ones((t_len, n))
+    for j in range(n):
+        rows = np.flatnonzero(valid[:, j])
+        if len(rows):
+            vol[rows, j] = local_vol(np.log1p(gap[rows, j]) + np.log1p(body[rows, j]))
+    ug, ub = np.where(valid, gap / vol, np.nan), np.where(valid, body / vol, np.nan)
+    run_start = np.maximum.accumulate(np.where(a & ~valid, np.arange(t_len)[:, None], 0), axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        log_o, log_c = np.log(np.where(a, o, 1.0)), np.log(np.where(a, c, 1.0))
+    return valid, vol, ug, ub, run_start, log_o, log_c
+
+
+def _rebuild(panel: Panel, valid: np.ndarray, g_new: np.ndarray, b_new: np.ndarray, run_start: np.ndarray,
+             log_o: np.ndarray, log_c: np.ndarray) -> Panel:
+    """Chain new gaps and bodies (simple returns) into prices, run by run, from each run's real first bar.
+
+    Args:
+        panel: The original panel (its mask and first bars are kept).
+        valid: Return days.
+        g_new: New simple gaps, ``(T, N)``; floored at −95%.
+        b_new: New simple bodies, ``(T, N)``; floored at −95%.
+        run_start: First row of each cell's run.
+        log_o: Real log opens.
+        log_c: Real log closes.
+
+    Returns:
+        The panel with the new prices.
+    """
+    n = panel.n
+    cols = np.arange(n)
+    lg = np.log1p(np.maximum(g_new, -0.95))
+    lb = np.log1p(np.maximum(b_new, -0.95))
+    step = np.where(valid, lg + lb, 0.0)
+    cum = np.cumsum(step, axis=0)
+    lc = log_c[run_start, cols] + cum - cum[run_start, cols]
+    lo = np.where(valid, np.vstack([np.zeros((1, n)), lc[:-1]]) + lg, log_o)
+    a = panel.avail
+    return panel.with_prices(np.where(a, np.exp(lo), np.nan), np.where(a, np.exp(lc), np.nan))
+
+
+def cross_sectional_permuter(panel: Panel):
+    """Deal each day's moves out again across instruments, keeping the calendar, volatility paths and volume.
+
+    The null hypothesis of a cross-sectional rule is that no coin's own characteristics (its past returns, its
+    volatility, its size) say anything about its next move relative to the others. So on each day, the moves of
+    the instruments that traded, in units of each one's local volatility, are handed out again at random and
+    rescaled to the volatility of the instrument that receives them. Members of the universe (as of the previous
+    close, the universe the day's positions were chosen from) trade moves among themselves, and the other pairs
+    among themselves, so the opportunity set keeps its own spread of moves. The day's market move, the order of
+    days, every volatility path, dollar volume, membership and the mask stay; only which coin got which move is
+    random. Unlike a shuffle of days, this also removes persistent differences between coins (small coins
+    earning more for years), which a day shuffle keeps in its null worlds, so it can find a factor premium and
+    not only timing (decision 0006).
+
+    Args:
+        panel: Research panel with an availability mask.
+
+    Returns:
+        ``draw(rng) -> Panel``.
+    """
+    valid, vol, ug, ub, run_start, log_o, log_c = _unit_moves(panel)
+    group = np.zeros(valid.shape, dtype=bool)
+    group[1:] = panel.member[:-1]
+    code = np.where(valid, np.where(group, 0, 1), 2)  # members first, then the other pairs, then no move
+    order_valid = np.argsort(code, axis=1, kind="stable")  # each row's cells by group, in column order
+    ugz, ubz = np.nan_to_num(ug), np.nan_to_num(ub)
+
+    def draw(rng: np.random.Generator) -> Panel:
+        donor = np.argsort(code + rng.random(valid.shape), axis=1)  # same groups, random order inside each
+        g_unit, b_unit = np.empty_like(ugz), np.empty_like(ubz)
+        np.put_along_axis(g_unit, order_valid, np.take_along_axis(ugz, donor, axis=1), axis=1)
+        np.put_along_axis(b_unit, order_valid, np.take_along_axis(ubz, donor, axis=1), axis=1)
+        return _rebuild(panel, valid, np.where(valid, g_unit * vol, 0.0), np.where(valid, b_unit * vol, 0.0),
+                        run_start, log_o, log_c)
 
     return draw
 

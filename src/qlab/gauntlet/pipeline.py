@@ -440,8 +440,9 @@ def evaluate(
     values["perm_p"] = p_value
     stages.append(Stage(
         "permutation", "Permutation", None, p_value, f"p <= {th['perm_max_p']}",
-        f"Edge Sharpe {_f(real)} on the real history; {beat} of {n_perm} shuffled histories did as well "
-        f"(p = {p_value:.3f}).",
+        f"Edge Sharpe {_f(real)} on the real history"
+        + (f" ({subject.null_note})" if getattr(subject, "null_note", "") else "")
+        + f"; {beat} of {n_perm} shuffled histories did as well (p = {p_value:.3f}).",
         {"null": np.round(null, 4).tolist(), "real": real},
     ))
     lap("permutation")

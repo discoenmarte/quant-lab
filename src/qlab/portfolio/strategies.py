@@ -36,6 +36,8 @@ class PortfolioStrategy:
         fn: The weights function.
         params: Tunable parameters by name.
         reference: Paper the rule comes from.
+        kind: ``"static"`` for rules built for universes whose members all trade every day, ``"dynamic"`` for
+            cross-sectional rules that rank point-in-time members, ``"any"`` for both.
     """
 
     name: str
@@ -44,6 +46,7 @@ class PortfolioStrategy:
     fn: Callable[..., np.ndarray]
     params: dict[str, Param] = field(default_factory=dict)
     reference: str = ""
+    kind: str = "static"
 
     def defaults(self) -> dict[str, float]:
         """Default parameter values, with integer parameters as int."""
@@ -148,8 +151,14 @@ def _past_return(panel: Panel, lookback: int, skip: int) -> np.ndarray:
     return (c.shift(skip) / c.shift(lookback) - 1.0).to_numpy()
 
 
+BENCHMARK_REBALANCE = 7  # days between rebalances of a dynamic panel's equal-weight benchmark
+
+
 def equal_weight(panel: Panel) -> np.ndarray:
-    """1/N in every instrument, rebalanced daily. The benchmark that is hard to beat (DeMiguel et al., 2009).
+    """1/N in every instrument. The benchmark that is hard to beat (DeMiguel et al., 2009).
+
+    On a static panel, every instrument, rebalanced daily. On a dynamic panel, every member, rebalanced weekly
+    (the engine lets positions drift in between), which is how a passive crypto index is run.
 
     Args:
         panel: Price panel.
@@ -157,7 +166,12 @@ def equal_weight(panel: Panel) -> np.ndarray:
     Returns:
         Weights ``(T, N)``.
     """
-    return np.full((len(panel.ts), panel.n), 1.0 / panel.n)
+    if not panel.dynamic:
+        return np.full((len(panel.ts), panel.n), 1.0 / panel.n)
+    count = panel.member.sum(axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        target = np.where(count > 0, panel.member / count, 0.0)
+    return _hold(target, BENCHMARK_REBALANCE)
 
 
 def risk_parity(panel: Panel, lookback: int = 63, target_vol: float = 0.10, rebalance: int = 21) -> np.ndarray:
@@ -280,7 +294,7 @@ REGISTRY: dict[str, PortfolioStrategy] = {
     s.name: s
     for s in [
         PortfolioStrategy("equal_weight", "equal_weight", "1/N in every instrument. The benchmark.", equal_weight,
-                          reference="DeMiguel, Garlappi & Uppal (2009)"),
+                          reference="DeMiguel, Garlappi & Uppal (2009)", kind="any"),
         PortfolioStrategy(
             "risk_parity", "risk_parity",
             "Inverse-volatility weights, scaled to a volatility target, so each asset class carries similar risk.",

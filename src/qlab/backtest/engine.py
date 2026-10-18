@@ -43,6 +43,8 @@ class CostModel:
 COST_PRESETS: dict[str, CostModel] = {
     "etf": CostModel(commission_bps=0.0, spread_bps=2.0, slippage_bps=1.0),
     "crypto": CostModel(commission_bps=10.0, spread_bps=2.0, slippage_bps=3.0),
+    # Altcoins beyond the majors: the same taker fee, a 10 bps spread and more slippage (20 bps a side in all).
+    "crypto_xs": CostModel(commission_bps=10.0, spread_bps=10.0, slippage_bps=5.0),
     "zero": CostModel(0.0, 0.0, 0.0),
 }
 

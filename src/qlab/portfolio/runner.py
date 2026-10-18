@@ -20,6 +20,7 @@ from .panel import UNIVERSES, Panel, load_panel
 from .strategies import REGISTRY
 
 MAX_CHART_POINTS = 4000
+MAX_WEIGHT_SERIES = 25  # instruments drawn in the weights chart; a dynamic panel's others are summed as "other"
 
 
 def question_of(family: str, universe: str) -> str:
@@ -93,11 +94,12 @@ def backtest(
     Raises:
         KeyError: Unknown universe or strategy.
         FileNotFoundError: An instrument isn't ingested.
-        ValueError: No dates in the requested period.
+        ValueError: No dates in the requested period, or a strategy built for the other kind of universe.
     """
     strat = REGISTRY[strategy]
     full_params = {**strat.defaults(), **(params or {})}
     panel = clip_to(load_panel(universe), start, end if include_lockbox else lockbox.clamp_end(end))
+    check_fit(strat, panel)
     if len(panel.ts) < 2:
         raise ValueError("no dates in the requested period before the lockbox")
     res = run_portfolio(panel, strat.weights(panel, full_params))
@@ -130,6 +132,24 @@ def backtest(
     return panel, res, summary
 
 
+def check_fit(strat: Any, panel: Panel) -> None:
+    """Refuse a strategy on the kind of universe it wasn't built for.
+
+    Static rules (trend, risk parity...) assume every instrument trades every day; cross-sectional rules rank
+    point-in-time members and need dollar volume.
+
+    Args:
+        strat: A portfolio strategy.
+        panel: The panel it would run on.
+
+    Raises:
+        ValueError: The strategy's ``kind`` doesn't match the panel.
+    """
+    kind = "dynamic" if panel.dynamic else "static"
+    if strat.kind not in ("any", kind):
+        raise ValueError(f"{strat.name} is built for {strat.kind} universes and {panel.name} is {kind}")
+
+
 def report(panel: Panel, res: PortfolioResult, summary: dict[str, Any]) -> dict[str, Any]:
     """Build the JSON report the Portfolio Lab renders, and save it under ``reports/portfolios``.
 
@@ -140,16 +160,23 @@ def report(panel: Panel, res: PortfolioResult, summary: dict[str, Any]) -> dict[
 
     Returns:
         ``meta``, ``stats`` (strategy and equal weight), ``series`` (time, equity, benchmark equity, drawdown,
-        gross exposure), ``weights`` (per instrument over time, downsampled), ``latest`` (weights now),
-        ``contribution`` (yearly return contribution per instrument) and ``monthly`` returns.
+        gross exposure), ``weights`` (per instrument over time, downsampled; on a dynamic panel the
+        ``MAX_WEIGHT_SERIES`` largest holdings plus ``other``), ``latest`` (weights now; on a dynamic panel only
+        holdings), ``contribution`` (yearly return contribution per instrument ever held), ``monthly`` returns,
+        ``costs`` and ``universe`` (see ``universe_stats``).
     """
     step = max(1, int(np.ceil(len(panel.ts) / MAX_CHART_POINTS)))
     ts = panel.ts
     eq = metrics.equity_curve(res.net)
     beq = metrics.equity_curve(res.benchmark)
-    prev = np.vstack([panel.close[:1], panel.close[:-1]])
-    asset_r = panel.close / prev - 1.0
+    asset_r = np.nan_to_num(panel.returns())
     contrib = (res.held * asset_r).sum(axis=0) / (len(ts) / panel.dpy)
+    held_any = np.flatnonzero(np.abs(res.held).sum(axis=0) > 0) if panel.dynamic else np.arange(panel.n)
+    shown = held_any[np.argsort(-np.abs(res.held[:, held_any]).mean(axis=0))][:MAX_WEIGHT_SERIES]
+    weights = {panel.symbols[i]: [round(float(x), 4) for x in res.held[::step, i]] for i in sorted(shown)}
+    if panel.dynamic and len(held_any) > len(shown):
+        rest = np.setdiff1d(held_any, shown)
+        weights["other"] = [round(float(x), 4) for x in res.held[::step][:, rest].sum(axis=1)]
     rep = {
         "meta": {k: summary[k] for k in ("question", "strategy", "family", "params", "universe", "symbols", "start",
                                           "end", "trial_id", "n_trials", "lockbox")},
@@ -164,9 +191,11 @@ def report(panel: Panel, res: PortfolioResult, summary: dict[str, Any]) -> dict[
             "drawdown": [float(x) for x in metrics.drawdown_series(res.net)[::step]],
             "gross": [float(x) for x in np.abs(res.held).sum(axis=1)[::step]],
         },
-        "weights": {sym: [round(float(x), 4) for x in res.held[::step, i]] for i, sym in enumerate(panel.symbols)},
-        "latest": {sym: float(res.held[-1, i]) for i, sym in enumerate(panel.symbols)},
-        "contribution": {sym: float(contrib[i]) for i, sym in enumerate(panel.symbols)},
+        "weights": weights,
+        "latest": {panel.symbols[i]: float(res.held[-1, i]) for i in held_any
+                   if not panel.dynamic or res.held[-1, i] != 0},
+        "contribution": {panel.symbols[i]: float(contrib[i]) for i in held_any},
+        "universe": universe_stats(panel),
         "monthly": metrics.monthly_returns(pd.Series(res.net, index=ts.tz_localize(None))),
         "costs": {"per_year": float(res.costs.sum() / (len(ts) / panel.dpy)),
                   "cash_per_year": float(res.cash.sum() / (len(ts) / panel.dpy)),
@@ -199,19 +228,53 @@ def load_report(trial_id: str) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
+def universe_stats(panel: Panel) -> dict[str, Any]:
+    """How a panel's membership behaves over time, for the Portfolio Lab.
+
+    Args:
+        panel: A panel.
+
+    Returns:
+        ``kind`` (``static`` or ``dynamic``), ``top`` (members per date, None for static), ``n_instruments``,
+        ``n_delisted`` (instruments whose last bar is before the panel's last date), ``members`` (count per date,
+        downsampled to at most ``MAX_CHART_POINTS``) and ``time`` (matching Unix seconds).
+    """
+    step = max(1, int(np.ceil(len(panel.ts) / MAX_CHART_POINTS)))
+    last = np.where(panel.avail.any(axis=0), len(panel.ts) - 1 - np.argmax(panel.avail[::-1], axis=0), -1)
+    return {
+        "kind": "dynamic" if panel.dynamic else "static",
+        "top": panel.rule.top if panel.rule else None,
+        "n_instruments": panel.n,
+        "n_delisted": int((last < len(panel.ts) - 1).sum()),
+        "members": [int(x) for x in panel.member.sum(axis=1)[::step]],
+        "time": [int(t.timestamp()) for t in panel.ts[::step]],
+    }
+
+
 def universes() -> list[dict[str, Any]]:
     """Every named universe with its instruments and, when ingested, its first date.
 
     Returns:
-        Rows ``name, description, members, first, n_days`` (``first`` is None when something isn't ingested).
+        Rows ``name, description, kind, members, n_instruments, top, n_delisted, first, n_days``. ``members`` lists
+        a static universe's instruments; a dynamic universe lists none (it has hundreds), and gives
+        ``n_instruments`` (ever members) and ``n_delisted`` instead. ``first`` is None when something isn't
+        ingested.
     """
     out = []
     for name, u in UNIVERSES.items():
+        dynamic = u["members"] == "binance_usdt"
+        row: dict[str, Any] = {"name": name, "description": u["description"],
+                               "kind": "dynamic" if dynamic else "static",
+                               "members": [] if dynamic else [s for _, s in u["members"]],
+                               "top": u["membership"].top if dynamic else None,
+                               "n_instruments": None if dynamic else len(u["members"]), "n_delisted": None}
         try:
             p = load_panel(name)
-            first, n_days = str(p.ts[0].date()), len(p.ts)
+            row.update(first=str(p.ts[0].date()), n_days=len(p.ts))
+            if dynamic:
+                st = universe_stats(p)
+                row.update(n_instruments=st["n_instruments"], n_delisted=st["n_delisted"])
         except (FileNotFoundError, ValueError):
-            first, n_days = None, 0
-        out.append({"name": name, "description": u["description"], "members": [s for _, s in u["members"]],
-                    "first": first, "n_days": n_days})
+            row.update(first=None, n_days=0)
+        out.append(row)
     return out

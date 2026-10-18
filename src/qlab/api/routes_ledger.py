@@ -26,7 +26,11 @@ def questions(include_calibration: bool = False) -> list[dict[str, Any]]:
 
 @router.get("/trials")
 def trials(
-    question: str | None = None, source: str | None = None, limit: int = 500, offset: int = 0
+    question: str | None = None,
+    source: str | None = None,
+    limit: int = 500,
+    offset: int = 0,
+    exclude_source: str | None = None,
 ) -> list[dict[str, Any]]:
     """Trials, newest first.
 
@@ -35,11 +39,12 @@ def trials(
         source: Only this origin (``studio``, ``gauntlet``, ``lockbox``, ``calibration``...).
         limit: Page size, at most 5,000.
         offset: Trials to skip.
+        exclude_source: Leave out this origin.
 
     Returns:
         Trial rows with params and metrics decoded.
     """
-    return ledger.list_trials(min(limit, 5000), question, source, offset)
+    return ledger.list_trials(min(limit, 5000), question, source, offset, exclude_source)
 
 
 @router.get("/counts")

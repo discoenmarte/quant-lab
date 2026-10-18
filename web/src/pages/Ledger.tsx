@@ -9,7 +9,12 @@ import { int, num, pct, tone, utc } from '../format';
 import { useApi } from '../hooks';
 
 const PAGE = 500;
-const SOURCES = ['', 'studio', 'gauntlet', 'lockbox', 'mining', 'calibration', 'demo'];
+/** Source filter options; the default hides calibration's hundreds of thousands of simulated trials. */
+const SOURCES: { value: string; label: string }[] = [
+  { value: '!calibration', label: 'all but calibration' },
+  { value: '', label: 'all sources' },
+  ...['studio', 'gauntlet', 'lockbox', 'mining', 'calibration', 'demo'].map((s) => ({ value: s, label: s })),
+];
 
 /**
  * Ledger: every trial the lab has run, grouped by research question, with the lockboxes already spent.
@@ -22,7 +27,7 @@ export function Ledger() {
   const lock = useApi<LockboxState>('/gauntlet/lockbox', 30000);
   const notify = useToast();
   const [question, setQuestion] = useState('');
-  const [source, setSource] = useState('');
+  const [source, setSource] = useState('!calibration');
   const [rows, setRows] = useState<TrialRow[]>([]);
   const [more, setMore] = useState(false);
 
@@ -30,7 +35,8 @@ export function Ledger() {
     async (offset: number) => {
       const q = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
       if (question) q.set('question', question);
-      if (source) q.set('source', source);
+      if (source.startsWith('!')) q.set('exclude_source', source.slice(1));
+      else if (source) q.set('source', source);
       try {
         const page = await get<TrialRow[]>(`/ledger/trials?${q}`);
         setRows((prev) => (offset ? [...prev, ...page] : page));
@@ -109,7 +115,7 @@ export function Ledger() {
         actions={
           <>
             <select value={source} onChange={(e) => setSource(e.target.value)}>
-              {SOURCES.map((s) => <option key={s} value={s}>{s || 'all sources'}</option>)}
+              {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
             {question && <button className="btn ghost" onClick={() => setQuestion('')}>Clear question</button>}
           </>
@@ -121,7 +127,7 @@ export function Ledger() {
           maxHeight={520}
           columns={[
             { key: 'when', label: 'When', sort: (t) => t.created_at, render: (t) => <span className="num">{utc(t.created_at).slice(0, 16)}</span> },
-            { key: 'q', label: 'Question', sort: (t) => t.question },
+            { key: 'question', label: 'Question', sort: (t) => t.question },
             { key: 'src', label: 'Source', sort: (t) => t.source, render: (t) => <Badge tone="muted">{t.source}</Badge> },
             { key: 'p', label: 'Params', render: (t) => <span className="faint num">{Object.entries(t.params).map(([k, v]) => `${k}=${v}`).join(' ')}</span> },
             { key: 'per', label: 'Period', render: (t) => <span className="faint num">{t.start_date?.slice(0, 7)} → {t.end_date?.slice(0, 7)}</span> },

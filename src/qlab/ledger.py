@@ -180,7 +180,11 @@ def selection_set(symbol: str, interval: str) -> list[dict[str, Any]]:
 
 
 def list_trials(
-    limit: int = 500, question: str | None = None, source: str | None = None, offset: int = 0
+    limit: int = 500,
+    question: str | None = None,
+    source: str | None = None,
+    offset: int = 0,
+    exclude_source: str | None = None,
 ) -> list[dict[str, Any]]:
     """Recent trials, newest first, with params and metrics decoded.
 
@@ -189,6 +193,7 @@ def list_trials(
         question: Restrict to one research question. None returns all.
         source: Restrict to one origin (``studio``, ``gauntlet``...). None returns all.
         offset: Number of newest trials to skip, for paging.
+        exclude_source: Leave out one origin, usually ``calibration``.
 
     Returns:
         Trial dicts as stored, with ``params`` and ``metrics`` as dicts.
@@ -200,6 +205,9 @@ def list_trials(
     if source:
         clauses.append("source = ?")
         args.append(source)
+    if exclude_source:
+        clauses.append("source <> ?")
+        args.append(exclude_source)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     recs = db.rows(
         f"SELECT * FROM trials {where} ORDER BY created_at DESC, trial_id LIMIT ? OFFSET ?", [*args, limit, offset]

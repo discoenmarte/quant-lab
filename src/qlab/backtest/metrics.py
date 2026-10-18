@@ -116,11 +116,47 @@ def max_drawdown(r: pd.Series | np.ndarray) -> float:
     return float(-dd.min()) if len(dd) else float("nan")
 
 
+def edge(
+    r: pd.Series | np.ndarray,
+    bench: pd.Series | np.ndarray,
+    rf: pd.Series | np.ndarray | None = None,
+) -> tuple[np.ndarray, float]:
+    """Return beyond a static position in the benchmark: the part of a strategy you can't get by holding less.
+
+    Regress the strategy's excess return on the benchmark's, ``r − rf = α + β (b − rf) + ε``, and keep
+    ``α + ε``. Its Sharpe is the appraisal ratio. Adding a strategy to the benchmark raises the best attainable
+    Sharpe exactly when this is positive: ``SR²(best mix) = SR²(benchmark) + appraisal²`` (Treynor & Black,
+    1973; Gibbons, Ross & Shanken, 1989). So a trend rule that is simply 60% invested in SPY scores zero, not
+    0.6 × SPY's Sharpe. Zheng (2026) found that gates judged on absolute returns reject true signals.
+
+    β is estimated on the same window. It is a measurement of exposure, not a trading decision, so this
+    doesn't leak into positions.
+
+    Args:
+        r: Strategy returns per period.
+        bench: Benchmark (buy-and-hold) returns per period, aligned with ``r``.
+        rf: Risk-free return per period. None means zero.
+
+    Returns:
+        ``(edge_returns, beta)``. Edge returns are all-NaN when the benchmark has no variance.
+    """
+    a = np.asarray(r, dtype=float)
+    b = np.asarray(bench, dtype=float)
+    f = np.zeros_like(a) if rf is None else np.asarray(rf, dtype=float)
+    xs, xb = np.nan_to_num(a - f), np.nan_to_num(b - f)
+    var_b = float(np.var(xb))
+    if len(a) < 2 or var_b == 0:
+        return np.full_like(a, np.nan), float("nan")
+    beta = float(np.mean((xs - xs.mean()) * (xb - xb.mean())) / var_b)
+    return xs - beta * xb, beta
+
+
 def summary(
     r: pd.Series,
     rf: pd.Series | None = None,
     ppy: int = 252,
     positions: pd.Series | None = None,
+    benchmark: pd.Series | None = None,
 ) -> dict[str, float | int]:
     """Headline numbers for one return series.
 
@@ -129,6 +165,8 @@ def summary(
         rf: Risk-free return per period for the Sharpe ratio. None means zero.
         ppy: Periods per year.
         positions: Position held each period (-1..1). When given, exposure and turnover are added.
+        benchmark: Buy-and-hold returns of the same instrument. When given, ``beta``, ``alpha`` (annual) and
+            ``edge_sharpe`` (annualised appraisal ratio, see ``edge``) are added.
 
     Returns:
         Dict with ``n_obs, total_return, cagr, vol, sharpe, sortino, max_dd, calmar, skew, kurtosis`` and,
@@ -155,6 +193,11 @@ def summary(
         out["exposure"] = float(np.mean(np.abs(p) > 1e-9))
         years = max(len(p) / ppy, 1e-9)
         out["turnover"] = float(np.nansum(np.abs(np.diff(p, prepend=0.0))) / years)
+    if benchmark is not None:
+        e, beta = edge(a, benchmark, rf)
+        out["beta"] = beta
+        out["alpha"] = float(np.nanmean(e) * ppy) if np.isfinite(e).any() else float("nan")
+        out["edge_sharpe"] = sharpe(e, None, ppy)
     return out
 
 

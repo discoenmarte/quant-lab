@@ -78,6 +78,7 @@ def run(
     costs: CostModel,
     rf: pd.Series | None = None,
     use_adjusted: bool = True,
+    with_trades: bool = True,
 ) -> BacktestResult:
     """Simulate holding a target position series.
 
@@ -87,9 +88,12 @@ def run(
         costs: Cost model applied to every position change.
         rf: Risk-free return per bar, aligned with ``bars``. None means zero.
         use_adjusted: Compute returns on dividend-adjusted prices when available.
+        with_trades: Build the round-trip table. The gauntlet runs thousands of backtests that only need
+            returns, and the table is most of the run time for strategies that trade often.
 
     Returns:
         A ``BacktestResult``. The first two bars carry no position (nothing could have been traded yet).
+        ``trades`` is empty when ``with_trades`` is False.
     """
     px = adjusted(bars) if use_adjusted else bars
     o = px["open"].to_numpy(float)
@@ -119,7 +123,7 @@ def run(
         costs=pd.Series(cost, index=idx),
         position=pd.Series(held, index=idx),
         benchmark=pd.Series(bench, index=idx),
-        trades=_trades(bars, held, net),
+        trades=_trades(bars, held, net) if with_trades else _trades(bars.iloc[:0], held[:0], net[:0]),
     )
 
 

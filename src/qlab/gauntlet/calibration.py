@@ -11,6 +11,9 @@ the truth is known:
   rules can earn from it, so a candidate that passes is a true positive. Varying the drift and the history
   length gives detection power versus data length.
 
+Portfolio strategies are calibrated the same way on synthetic eight-asset panels (a common market factor plus
+GARCH shocks per asset; planted trends flip independently per asset).
+
 From the two rates the report also computes the precision of the gate against a random-admission control at
 the same prior share of real edges (Zheng, 2026): a gate is worth having only if what it admits is more often
 real than what a coin would admit.
@@ -39,13 +42,23 @@ from ..backtest import metrics
 from ..backtest.engine import COST_PRESETS, run
 from ..backtest.strategies import REGISTRY
 from ..data.bars import normalize_bars
+from ..portfolio.engine import run_portfolio
+from ..portfolio.strategies import REGISTRY as PORTFOLIOS
+from ..portfolio.synthetic import synthetic_panel
 from ..timeutil import naive_utc
 from . import thresholds
-from .pipeline import STAGES, build_grid, clean, column_sharpes, edge_matrix, evaluate, judge, to_daily
+from .pipeline import STAGES, build_grid, clean, column_sharpes, edge_matrix, evaluate, judge
+from .subjects import BarSubject, PanelSubject
 
 DPY = 252
 NOISE_FAMILIES = ["trend_sma", "sma_cross", "tsmom", "donchian", "rsi_reversion"]
 POWER_FAMILIES = ["trend_sma", "tsmom"]
+# Portfolio families are named "portfolio/<key>". Only timing rules are calibrated on noise: volatility-scaling
+# rules (risk parity, volatility management) have a real edge in markets with volatility clustering.
+PORTFOLIO_NOISE = ["portfolio/tsmom", "portfolio/trend_filter", "portfolio/xs_momentum"]
+PORTFOLIO_POWER = ["portfolio/tsmom", "portfolio/trend_filter"]
+PORTFOLIO_YEARS = 18  # about the research length of the multi-asset universe
+PORTFOLIO_ASSETS = 8
 
 
 def synthetic_bars(years: float, trend: float = 0.0, seed: int = 0, vol: float = 0.16, drift: float = 0.06,
@@ -99,19 +112,43 @@ def true_edge(family: str, trend: float, years: float = 400.0, seed: int = 12345
     """Long-run edge Sharpe of a family's default rule in a planted-trend market: the truth power is measured at.
 
     Args:
-        family: Strategy registry key.
-        trend: Hidden trend size (see ``synthetic_bars``).
-        years: Simulation length; 400 years gives a standard error near 0.05.
+        family: Strategy registry key, or ``portfolio/<key>`` for a portfolio strategy on a synthetic panel.
+        trend: Hidden trend size (see ``synthetic_bars`` and ``synthetic_panel``).
+        years: Simulation length; 400 years gives a standard error near 0.05 (panels use at most 150).
         seed: Random seed.
 
     Returns:
         Annual edge Sharpe after ETF costs.
     """
+    if family.startswith("portfolio/"):
+        panel = synthetic_panel(min(years, 150.0), PORTFOLIO_ASSETS, trend, seed)
+        res_p = run_portfolio(panel, PORTFOLIOS[family.split("/", 1)[1]].weights(panel))
+        e, _ = metrics.edge(res_p.net, res_p.benchmark)
+        return float(metrics.sharpe(e, None, DPY))
     bars = synthetic_bars(years, trend, seed)
     strat = REGISTRY[family]
     res = run(bars, strat.positions(bars), COST_PRESETS["etf"], with_trades=False)
     e, _ = metrics.edge(res.returns.to_numpy(), res.benchmark.to_numpy())
     return float(metrics.sharpe(e, None, DPY))
+
+
+def make_subject(task: dict[str, Any]) -> BarSubject | PanelSubject:
+    """The synthetic market of one calibration run, as a gauntlet subject with no lockbox.
+
+    Args:
+        task: ``family`` (a single-instrument strategy key, or ``portfolio/<key>``), ``years``, ``trend``, ``seed``.
+
+    Returns:
+        A ``BarSubject`` on synthetic bars, or a ``PanelSubject`` on a synthetic eight-asset panel for a
+        portfolio family.
+    """
+    if task["family"].startswith("portfolio/"):
+        panel = synthetic_panel(task["years"], PORTFOLIO_ASSETS, task["trend"], task["seed"])
+        return PanelSubject(panel, task["family"].split("/", 1)[1], panel.ts[-1] + pd.Timedelta(days=1),
+                            "synthetic")
+    bars = synthetic_bars(task["years"], task["trend"], task["seed"])
+    return BarSubject(bars, task["family"], bars["ts"].iloc[-1] + pd.Timedelta(days=1), source="synthetic",
+                      symbol="SYNTH", interval="1d", model=COST_PRESETS["etf"], rf=None, dpy=DPY)
 
 
 def _one(task: dict[str, Any]) -> dict[str, Any]:
@@ -126,27 +163,19 @@ def _one(task: dict[str, Any]) -> dict[str, Any]:
         ``params`` and compact grid ``records`` for the ledger.
     """
     th = task["th"]
-    bars = synthetic_bars(task["years"], task["trend"], task["seed"])
-    strat = REGISTRY[task["family"]]
-    model = COST_PRESETS["etf"]
-    sealed = bars["ts"].iloc[-1] + pd.Timedelta(days=1)
-    params = strat.defaults()
+    subject = make_subject(task)
+    params = subject.strat.defaults()
     selection: list[float] = []
     counted = False
-    if task["scenario"] == "noise_tuned":
+    if task["scenario"].endswith("tuned"):
         # A researcher who searched the whole grid and kept the in-sample best, honestly counting every try.
-        grid = build_grid(strat, params, int(th["grid_max"]), task["seed"])
-        cols, bench = [], None
-        for cfg in grid:
-            res = run(bars, strat.positions(bars, cfg), model, with_trades=False)
-            cols.append(to_daily(res.returns.to_numpy(), bars["ts"]).to_numpy())
-            bench = res.benchmark.to_numpy() if bench is None else bench
-        e, _ = edge_matrix(np.column_stack(cols), bench)
-        sr = column_sharpes(e) * math.sqrt(DPY)
+        grid = build_grid(subject, params, int(th["grid_max"]), task["seed"])
+        sims = [subject.simulate(cfg) for cfg in grid]
+        e, _ = edge_matrix(np.column_stack([x.net for x in sims]), sims[0].bench)
+        sr = column_sharpes(e) * math.sqrt(subject.dpy)
         params = grid[int(np.nanargmax(sr))]
         selection, counted = [float(x) for x in sr[np.isfinite(sr)]], True
-    out = evaluate(bars, strat, params, model, None, dpy=DPY, sealed_from=sealed, th=th, selection=selection,
-                   candidate_counted=counted, seed=task["seed"])
+    out = evaluate(subject, params, th=th, selection=selection, candidate_counted=counted, seed=task["seed"])
     keep = ("sharpe", "cagr", "max_dd", "n_obs", "edge_sharpe")
     return {
         **{k: v for k, v in task.items() if k != "th"},
@@ -238,6 +267,8 @@ def run_calibration(
     log: Callable[[str], None] = print,
     actor: str = "user",
     base_seed: int = 1_000,
+    portfolio_reps: int = 40,
+    portfolio_power_reps: int = 20,
 ) -> dict[str, Any]:
     """Run the calibration study and save its report.
 
@@ -254,6 +285,8 @@ def run_calibration(
         log: Progress callback.
         actor: Who ran it, for the audit log.
         base_seed: First market seed; run ``i`` uses ``base_seed + i + 1``.
+        portfolio_reps: Noise runs per portfolio family and researcher type (0 skips portfolios).
+        portfolio_power_reps: Planted-trend runs per portfolio family, edge size and history length.
 
     Returns:
         The report: ``id``, ``created_at``, ``thresholds_version``, ``settings``, ``noise``, ``power``,
@@ -274,6 +307,16 @@ def run_calibration(
         sizes[target] = round((lo + hi) / 2, 4)
     truth = {(f, t): true_edge(f, sizes[t]) for f in POWER_FAMILIES for t in edges}
     log(f"planted trend sizes {sizes}; true edges {({f'{k[0]}@{k[1]}': round(v, 2) for k, v in truth.items()})}")
+    p_sizes: dict[float, float] = {}
+    if portfolio_reps:
+        for target in edges:
+            lo, hi = 0.0, 1.0
+            for _ in range(8):
+                mid = (lo + hi) / 2
+                lo, hi = (mid, hi) if true_edge("portfolio/tsmom", mid) < target else (lo, mid)
+            p_sizes[target] = round((lo + hi) / 2, 4)
+        truth.update({(f, t): true_edge(f, p_sizes[t]) for f in PORTFOLIO_POWER for t in edges})
+        log(f"portfolio trend sizes {p_sizes}")
 
     tasks = []
     seed = base_seed
@@ -289,6 +332,19 @@ def run_calibration(
                 for _ in range(power_reps):
                     seed += 1
                     tasks.append({"scenario": "power", "family": family, "years": y, "trend": sizes[target],
+                                  "target": target, "true_edge": truth[(family, target)], "seed": seed, "th": th})
+    for family in PORTFOLIO_NOISE if portfolio_reps else []:
+        for scenario in ("noise_fixed", "noise_tuned"):
+            for _ in range(portfolio_reps):
+                seed += 1
+                tasks.append({"scenario": scenario, "family": family, "years": PORTFOLIO_YEARS, "trend": 0.0,
+                              "seed": seed, "th": th})
+    for family in PORTFOLIO_POWER if portfolio_reps else []:
+        for target in edges:
+            for y in (10, PORTFOLIO_YEARS):
+                for _ in range(portfolio_power_reps):
+                    seed += 1
+                    tasks.append({"scenario": "power", "family": family, "years": y, "trend": p_sizes[target],
                                   "target": target, "true_edge": truth[(family, target)], "seed": seed, "th": th})
 
     runs: list[dict[str, Any]] = []
@@ -315,8 +371,10 @@ def run_calibration(
         "thresholds_version": version,
         "thresholds": th,
         "settings": {"noise_reps": noise_reps, "power_reps": power_reps, "years": list(years),
-                     "noise_years": noise_years, "edges": list(edges), "trend_sizes": {str(k): v for k, v in
-                                                                                      sizes.items()},
+                     "noise_years": noise_years, "edges": list(edges),
+                     "trend_sizes": {str(k): v for k, v in sizes.items()},
+                     "portfolio_trend_sizes": {str(k): v for k, v in p_sizes.items()},
+                     "portfolio_reps": portfolio_reps, "portfolio_power_reps": portfolio_power_reps,
                      "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed,
                      "code": code},
         **summarise(runs, th),
@@ -347,12 +405,19 @@ def headline(report: dict[str, Any]) -> str:
     k = sum(r["admitted"] for r in noise)
     n = sum(r["n"] for r in noise)
     lo, hi = wilson(k, n)
-    parts = []
-    for p in sorted(report["power"], key=lambda r: (r["true_edge"] or 0, r["years"])):
-        if p["family"] == "trend_sma":
-            parts.append(f"{p['years']:g} years: {p['rate']:.0%} at edge {p['true_edge']:.2f}")
-    return (f"Noise passes {k / max(n, 1):.1%} of the time (95% CI {lo:.1%}–{hi:.1%}, {n} runs). "
-            f"Detection of a planted trend edge (trend rule) — " + "; ".join(parts) + ".")
+    worst = max(noise, key=lambda r: r["rate"]) if noise else None
+
+    def curve(family: str) -> str:
+        rows = sorted((p for p in report["power"] if p["family"] == family),
+                      key=lambda r: (r["true_edge"] or 0, r["years"]))
+        return "; ".join(f"{p['years']:g} y at edge {p['true_edge']:.2f}: {p['rate']:.0%}" for p in rows)
+
+    text = (f"Noise passes {k / max(n, 1):.1%} of the time (95% CI {lo:.1%}–{hi:.1%}, {n} runs"
+            + (f"; worst family {worst['family']} {worst['rate']:.0%}" if worst else "") + "). "
+            f"Single-instrument trend rule detects a planted edge — {curve('trend_sma')}.")
+    if any(p["family"].startswith("portfolio/") for p in report["power"]):
+        text += f" Portfolio trend (8 assets) — {curve('portfolio/tsmom')}."
+    return text
 
 
 def list_reports() -> list[dict[str, Any]]:

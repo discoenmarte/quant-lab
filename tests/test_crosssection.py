@@ -104,3 +104,22 @@ def test_usdt_ingest_writes_the_manifest_and_keeps_delisted_pairs(monkeypatch):
     assert {e["symbol"] for e in res["series"]} == {"ANCUSDT", "BTCUSDT"}
     assert all(e["interval"] == "1d" for e in res["series"])
     assert any(e["action"] == "data.universe" for e in audit.recent(10))
+
+
+def test_downloads_are_checked_against_the_listed_md5(monkeypatch):
+    """A zip whose bytes don't match the bucket's MD5 is refused; a matching one is cached and reused."""
+    import hashlib
+
+    import pytest
+
+    from qlab.data.http import SourceError
+
+    blob = b"PK fake zip"
+    calls = []
+    monkeypatch.setattr(binance, "get", lambda url, **_: calls.append(url) or blob)
+    with pytest.raises(SourceError, match="MD5"):
+        binance._download("monthly", "ANCUSDT", "1d", "2022-11", "0" * 32)
+    good = hashlib.md5(blob).hexdigest()
+    assert binance._download("monthly", "ANCUSDT", "1d", "2022-11", good) == blob
+    assert binance._download("monthly", "ANCUSDT", "1d", "2022-11", good) == blob
+    assert len(calls) == 2  # the second good call came from the cache

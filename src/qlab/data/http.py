@@ -1,7 +1,12 @@
-"""Small HTTP helper with retries and an honest user agent."""
+"""Small HTTP helper with retries, an honest user agent and one shared keep-alive connection pool.
+
+Reusing connections matters for archives of many small files: from the owner's network a fresh TLS connection
+to the Binance archive costs about half a second, longer than the download itself.
+"""
 
 from __future__ import annotations
 
+import threading
 import time
 
 import httpx
@@ -11,6 +16,24 @@ USER_AGENT = "Mozilla/5.0 (compatible; quant-lab/0.1; personal research; +https:
 
 class SourceError(RuntimeError):
     """A data source could not be reached or returned something unusable."""
+
+
+_client: httpx.Client | None = None
+_client_lock = threading.Lock()
+
+
+def _shared() -> httpx.Client:
+    """The process-wide client, created on first use; httpx clients are safe to share between threads.
+
+    Returns:
+        A client with the lab's user agent that follows redirects.
+    """
+    global _client
+    with _client_lock:
+        if _client is None:
+            _client = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True,
+                                   limits=httpx.Limits(max_connections=16, max_keepalive_connections=16))
+        return _client
 
 
 def get(url: str, *, timeout: float = 30.0, retries: int = 3, allow_404: bool = False) -> bytes | None:
@@ -34,7 +57,7 @@ def get(url: str, *, timeout: float = 30.0, retries: int = 3, allow_404: bool = 
     last: Exception | None = None
     for attempt in range(retries):
         try:
-            res = httpx.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+            res = _shared().get(url, timeout=timeout)
         except httpx.HTTPError as err:
             last = err
             time.sleep(2**attempt)

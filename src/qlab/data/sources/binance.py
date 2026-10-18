@@ -1,12 +1,14 @@
 """Binance public data archive (data.binance.vision): spot klines, and the list of every pair it holds.
 
 Monthly zip files cover finished months; the current month (and a just-finished month that hasn't been
-published yet) comes from daily files. Every zip has a ``.CHECKSUM`` file with its SHA-256, which is verified
-before the zip is kept. Downloaded zips are cached under ``raw/binance``.
+published yet) comes from daily files. Downloaded zips are cached under ``raw/binance``.
 
-The archive is an S3 bucket, so its listing says which files exist: ``fetch`` downloads only listed files
-instead of probing every month since 2017, and re-downloads a cached zip whose MD5 no longer matches the listed
-ETag (the archive occasionally republishes a month). The archive keeps pairs after Binance delists them, which
+The archive is an S3 bucket, so its listing says which files exist and gives each file's MD5 (its ETag):
+``fetch`` downloads only listed files instead of probing every month since 2017, verifies each zip against the
+listed MD5, and re-downloads a cached zip whose MD5 no longer matches (the archive occasionally republishes a
+month). When a listing has no plain MD5, the zip's published ``.CHECKSUM`` file (SHA-256) is verified instead.
+Files come from the bucket's own endpoint, which answers about twice as fast from the owner's network as the
+CDN name; ``prefetch`` warms the cache for many pairs at once. The archive keeps pairs after Binance delists them, which
 is what makes a survivorship-free cross-section possible (``usdt_universe``).
 
 Quirk: spot kline timestamps are in milliseconds up to 2024 and in **microseconds from 2025-01-01**. The
@@ -39,7 +41,7 @@ KLINE_COLUMNS = [
     "quote_volume", "trades", "taker_buy_base", "taker_buy_quote", "ignore",
 ]
 FIRST_MONTH = "2017-08"
-WORKERS = 6  # parallel downloads per pair; the archive is a static file host, so a few at a time is polite
+WORKERS = 8  # parallel downloads; the archive is a static file host, so a few at a time is polite
 
 # Pairs left out of the USDT cross-section, by base asset. Each has a reason a momentum or size rule shouldn't
 # trade it as a crypto asset: it is pegged to a currency or to gold, or it duplicates another coin.
@@ -142,37 +144,40 @@ def listed(symbol: str, interval: str, kind: str = "monthly", month: str = "") -
 
 
 def _download(kind: str, symbol: str, interval: str, stamp: str, etag: str = "") -> bytes | None:
-    """Fetch one archive zip, verify its checksum and cache it.
+    """Fetch one archive zip, verify it and cache it.
 
     Args:
         kind: ``"monthly"`` or ``"daily"``.
         symbol: Trading pair.
         interval: Kline interval.
         stamp: Month or day stamp of the file.
-        etag: The listed ETag; a cached file whose MD5 differs (a republished month) is downloaded again.
-            Empty trusts the cache.
+        etag: The listed ETag. A plain one is the file's MD5: a cached file must match it (or is downloaded
+            again) and a download must match it. Empty or multipart (with ``-``) trusts the cache and verifies
+            downloads against the published SHA-256 ``.CHECKSUM`` file instead.
 
     Returns:
         The zip bytes, or None when the file isn't published.
 
     Raises:
-        SourceError: The checksum doesn't match.
+        SourceError: The download doesn't match its checksum.
     """
+    md5 = etag if etag and "-" not in etag else ""
     path = _cache_path(kind, symbol, interval, stamp)
     if path.exists():
         blob = path.read_bytes()
-        if not etag or "-" in etag or hashlib.md5(blob).hexdigest() == etag:  # "-" marks a multipart ETag
+        if not md5 or hashlib.md5(blob).hexdigest() == md5:
             return blob
-    url = f"{BASE}/{kind}/klines/{quote(symbol)}/{interval}/{quote(symbol)}-{interval}-{stamp}.zip"
-    blob = get(url, allow_404=True)
+    key = f"data/spot/{kind}/klines/{quote(symbol)}/{interval}/{quote(symbol)}-{interval}-{stamp}.zip"
+    blob = get(f"{BUCKET}/{key}", allow_404=True)
     if blob is None:
         return None
-    checksum = get(url + ".CHECKSUM", allow_404=True)
-    if checksum:
-        expected = checksum.decode().split()[0].lower()
-        actual = hashlib.sha256(blob).hexdigest()
-        if actual != expected:
-            raise SourceError(f"checksum mismatch for {url}")
+    if md5:
+        if hashlib.md5(blob).hexdigest() != md5:
+            raise SourceError(f"MD5 mismatch for {key}")
+    else:
+        checksum = get(f"{BUCKET}/{key}.CHECKSUM", allow_404=True)
+        if checksum and hashlib.sha256(blob).hexdigest() != checksum.decode().split()[0].lower():
+            raise SourceError(f"checksum mismatch for {key}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(blob)
     return blob
@@ -228,12 +233,37 @@ def _previous_month(month: str) -> str:
     return f"{y - 1:04d}-12" if m == 1 else f"{y:04d}-{m - 1:02d}"
 
 
-def fetch(symbol: str, interval: str, start_month: str = FIRST_MONTH, today: date | None = None) -> pd.DataFrame:
-    """Full kline history for one pair and interval, from the files the archive lists.
+def _plan(symbol: str, interval: str, start_month: str, today: date) -> list[tuple[str, str, str]]:
+    """The files that make up one pair's history, from the archive listing.
 
     Finished months come from monthly files. Months after the last monthly file come from daily files, but only
     for the current and the previous month (a monthly file appears a few days after its month ends); a pair
     whose last monthly file is older than that was delisted, and has no daily files to look for.
+
+    Args:
+        symbol: Trading pair.
+        interval: Kline interval.
+        start_month: First month (``YYYY-MM``).
+        today: Reference date in UTC; days up to yesterday are included.
+
+    Returns:
+        ``(kind, stamp, etag)`` per file, monthly files first.
+    """
+    yesterday = (today - timedelta(days=1)).isoformat()
+    current = today.strftime("%Y-%m")
+    previous = _previous_month(current)
+    monthly = {m: e for m, e in listed(symbol, interval, "monthly").items() if start_month <= m < current}
+    last = max(monthly) if monthly else None
+    daily: dict[str, str] = {}
+    if last is None or last >= _previous_month(previous):
+        for month in (previous, current):
+            if last is None or month > last:
+                daily.update({d: e for d, e in listed(symbol, interval, "daily", month).items() if d <= yesterday})
+    return [("monthly", m, e) for m, e in sorted(monthly.items())] + [("daily", d, e) for d, e in sorted(daily.items())]
+
+
+def fetch(symbol: str, interval: str, start_month: str = FIRST_MONTH, today: date | None = None) -> pd.DataFrame:
+    """Full kline history for one pair and interval, from the files the archive lists (see ``_plan``).
 
     Args:
         symbol: Trading pair, e.g. ``"BTCUSDT"``.
@@ -247,26 +277,49 @@ def fetch(symbol: str, interval: str, start_month: str = FIRST_MONTH, today: dat
     Raises:
         SourceError: Nothing could be downloaded at all, or a checksum doesn't match.
     """
-    today = today or datetime.now(UTC).date()
-    yesterday = today - timedelta(days=1)
-    current = today.strftime("%Y-%m")
-    previous = _previous_month(current)
-    monthly = {m: e for m, e in listed(symbol, interval, "monthly").items() if start_month <= m < current}
-    last = max(monthly) if monthly else None
-    daily: dict[str, str] = {}
-    if last is None or last >= _previous_month(previous):
-        for month in (previous, current):
-            if last is None or month > last:
-                daily.update({d: e for d, e in listed(symbol, interval, "daily", month).items()
-                              if d <= yesterday.isoformat()})
-
+    files = _plan(symbol, interval, start_month, today or datetime.now(UTC).date())
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        blobs = list(pool.map(lambda item: _download("monthly", symbol, interval, *item), sorted(monthly.items())))
-        blobs += list(pool.map(lambda item: _download("daily", symbol, interval, *item), sorted(daily.items())))
+        blobs = list(pool.map(lambda f: _download(f[0], symbol, interval, f[1], f[2]), files))
     blobs = [b for b in blobs if b is not None]
     if not blobs:
         raise SourceError(f"no Binance klines found for {symbol} {interval}")
     return normalize_bars(pd.concat([parse_klines(b) for b in blobs], ignore_index=True))
+
+
+def prefetch(symbols: list[str], interval: str, log=None, today: date | None = None) -> int:
+    """Download every listed file of many pairs into the cache, a few at a time, so ingesting them is fast.
+
+    Args:
+        symbols: Trading pairs.
+        interval: Kline interval.
+        log: Receives progress lines; None is silent.
+        today: Reference date in UTC. None means now.
+
+    Returns:
+        Number of files in the plan (cached ones are verified, not downloaded again).
+
+    Raises:
+        SourceError: A listing can't be fetched.
+    """
+    say = log or (lambda _msg: None)
+    day = today or datetime.now(UTC).date()
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        plans = list(pool.map(lambda s: _plan(s, interval, FIRST_MONTH, day), symbols))
+    files = [(s, *f) for s, plan in zip(symbols, plans, strict=True) for f in plan]
+    say(f"{len(files)} files for {len(symbols)} pairs")
+
+    def one(item: tuple[str, str, str, str]) -> None:
+        s, kind, stamp, etag = item
+        try:
+            _download(kind, s, interval, stamp, etag)
+        except SourceError as err:  # fetch retries the file and reports it per pair
+            say(f"{s} {stamp}: {err}")
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for i, _ in enumerate(pool.map(one, files), 1):
+            if i % 2000 == 0:
+                say(f"  {i}/{len(files)} files")
+    return len(files)
 
 
 def exclusion_reason(base: str, bases: set[str], first_month: str | None = None) -> str | None:

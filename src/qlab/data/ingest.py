@@ -144,8 +144,8 @@ def ingest_usdt_universe(log: Callable[[str], None] | None = None, actor: str = 
     """Ingest daily bars of every USDT pair in the Binance archive, delisted pairs included.
 
     Lists the archive, leaves out stablecoins, gold tokens, wrapped coins, leveraged tokens and tokenized
-    equities (``binance.exclusion_reason``), writes the manifest that the crypto universes read, then ingests
-    the kept pairs' 1d bars with checksums and quality checks.
+    equities (``binance.exclusion_reason``), writes the manifest that the crypto universes read, downloads every
+    file of the kept pairs into the cache (``binance.prefetch``), then ingests their 1d bars with quality checks.
 
     Args:
         log: Receives progress lines.
@@ -164,6 +164,7 @@ def ingest_usdt_universe(log: Callable[[str], None] | None = None, actor: str = 
     audit.log("data.universe", target="binance_usdt", actor=actor,
               details={"n_pairs": manifest["n_pairs"], "kept": len(manifest["kept"]),
                        "excluded": len(manifest["excluded"])})
+    binance.prefetch(manifest["kept"], "1d", say)
     res = ingest("binance", manifest["kept"], log=say, actor=actor, intervals=["1d"])
     return {**res, "manifest": manifest}
 

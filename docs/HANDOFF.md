@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-18, after M3 (M3b in progress)
+- **Last updated:** 2026-10-18, after M3 and M3b
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -70,8 +70,9 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M1 | Data lake | **Done** (tag `m1`). 26 series ingested on 2026-10-17, zero errors. Data Health page. |
 | M2 | Backtest engine | **Done** (tag `m2`). 6 strategies, next-open engine with costs and cash, look-ahead check, Studio. |
 | M3 | Validation gauntlet | **Done** (tag `m3`). Ten stages on edge returns, fixed lockbox, calibrated in three studies. |
-| M3b | Portfolio lab | **In progress.** Engine, strategies, portfolio gauntlet and calibration done; web page next. |
-| M7a | Forward paper book | **Next after M3b** (decision 0005). Spec below. |
+| M3b | Portfolio lab | **Done** (tag `m3b`). Engine, six strategies, portfolio gauntlet and calibration, Portfolio Lab page. |
+| M3c | Breadth: crypto cross-section | **Next** (docs/SCALING.md). Spec below. |
+| M7a | Forward paper book | After M3c (decision 0005). Spec below. |
 | M6, M7b, M4, M5 | Registry, broker paper trading, inbox, mining | In that order (decision 0005). |
 | M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
@@ -114,15 +115,47 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 
 ## 6. Specs for the next milestones
 
-### M3b: portfolio lab (in progress)
+### M3b: portfolio lab (done)
 
-Done: `qlab.portfolio` (panels for six universes, weights engine, six strategies, look-ahead check, runner with
-reports, synthetic panels), `PanelSubject` in the gauntlet, portfolio calibration scenarios, `/api/portfolio/*`,
-`qlab portfolio` and `qlab portfolio-gauntlet`, tests. Left: the Portfolio Lab page (weights over time, equity
-against equal weight, latest weights, contributions, run the gauntlet from the page), an official calibration
-including portfolios, and the first real portfolio verdicts.
+- `qlab.portfolio`: panels for six universes (from the first date every member exists), a weights engine with
+  next-open fills, compounded legs, per-instrument costs and leverage financing, and equal weight through the same
+  engine as the benchmark. Strategies: time-series momentum with volatility targeting, the ten-month trend
+  filter, cross-sectional and dual momentum, risk parity, volatility management, equal weight.
+- The gauntlet judges `PanelSubject`s the same way (day-level volatility-preserving shuffles across instruments).
+- `qlab portfolio`, `qlab portfolio-gauntlet`, `qlab portfolio-batch` (pre-registered batches, deflated against
+  the batch), Portfolio Lab page, portfolio option in the Gauntlet Console.
+- **Calibration study D** (seeds 130,001+, thresholds v2, report `1782243a`): noise passes 1.0% pooled (CI
+  0.6-1.7%, 1,240 runs), no family above 2.5%; portfolio trend with true edge 1.0 is caught 95% of the time with
+  18 years, 40% with 10; edge 0.5, 40% with 18 years.
+- **First real verdicts** (pre-registered batch `portfolio-batch`, published defaults, universes
+  `asset_classes_long` and `all_etfs`): **all ten rejected.** Edge Sharpes 0.17-0.34 for the timing rules (risk
+  parity negative on `all_etfs`), permutation p 0.05-0.5, DSR 0.6-0.9, walk-forward re-optimisation negative out of
+  sample. Best near-miss: trend filter (edge 0.34, p 0.046 and 0.076, false-discovery chance 55-61%). The lockboxes
+  of these ten questions are still sealed (the batch used research data only).
+- **Disclosure:** during development the six strategies were run over the full history on `multi_asset`,
+  `sectors`, `crypto` and `etfs_and_crypto` before being recorded; they were then recorded with the lockbox
+  included, so those 24 questions are spent (audit event `lockbox.disclosure`).
 
-### M7a: forward paper book (next)
+### M3c: breadth, a survivorship-free crypto cross-section (next; see docs/SCALING.md)
+
+Why: on ~20 years of daily ETF data no realistic edge can be told from luck (all ten pre-registered portfolio
+candidates were rejected; the best near-miss needs ~23 years of data at its Sharpe). Power grows with independent
+bets. The Binance archive is free and keeps delisted pairs (checked 2026-10-18: ANCUSDT has files through its
+December 2022 delisting, BTTUSDT through January 2022), so a survivorship-free cross-section costs nothing.
+
+1. **Ingest:** list `data/spot/monthly/klines/` on the archive's S3 endpoint (paginated, 1,000 prefixes a page),
+   keep USDT pairs, drop stablecoins and leveraged tokens (`UP`, `DOWN`, `BULL`, `BEAR`), download 1d monthly
+   files with checksums, a few threads at a time. Expect a few hundred pairs and ~20,000 small files.
+2. **Dynamic panels:** an availability mask (T × N) instead of "start when everyone exists"; prices NaN when an
+   instrument doesn't trade. Point-in-time membership: top N by trailing 30-day dollar volume, computed from data
+   up to each date only. A delisted position exits at its last close (optimistic; note it).
+3. **Engine and strategies:** weights forced to zero outside membership; cross-sectional momentum, short-term
+   reversal, low volatility, size; long-only (spot) first, long-short as research only.
+4. **Gauntlet and calibration:** permutations shuffle whole days with the mask kept in place; calibrate on
+   synthetic panels with listings and delistings.
+5. **Pre-register** the first batch (published crypto factors at their published parameters) before any run.
+
+### M7a: forward paper book
 
 Each trading day after the close: compute target weights of every card in the book from data up to that close,
 store them with the UTC time they were decided (before the next bar exists), then score them as bars arrive.

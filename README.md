@@ -100,7 +100,8 @@ flowchart LR
 | M1 | Data lake | Free sources (ETFs, BTC/ETH, factors), quality checks, Data Health page | done |
 | M2 | Backtest engine | Strategy library, cost model, metrics, Backtest Studio | done |
 | M3 | Validation gauntlet | 10 stages on edge returns, fixed lockbox, calibration (three studies), Gauntlet Console, Ledger page | done |
-| M3b | Portfolio lab | Multi-asset panels, weights engine, six diversified strategies, portfolio gauntlet and calibration | next |
+| M3b | Portfolio lab | Multi-asset panels, weights engine, six diversified strategies, portfolio gauntlet and calibration, pre-registered batches | done |
+| M3c | Breadth | Survivorship-free crypto cross-section from the free Binance archive ([docs/SCALING.md](docs/SCALING.md)) | next |
 | M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
 | M6 | Registry and alerts | Strategy board, portfolio, alert rules | planned |
@@ -109,7 +110,7 @@ flowchart LR
 | M9 | Intraday mode | Validated intraday library, morning selector, replay | planned |
 
 The full plan, with each milestone's screens, costs and the research it rests on, is in
-[ROADMAP.md](ROADMAP.md). Implementation state and next steps are in [docs/HANDOFF.md](docs/HANDOFF.md).
+[ROADMAP.md](ROADMAP.md). What to build next, what it costs and what it can earn: [docs/SCALING.md](docs/SCALING.md). Implementation state and next steps are in [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ## Repository layout
 

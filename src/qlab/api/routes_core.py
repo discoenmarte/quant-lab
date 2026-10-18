@@ -79,7 +79,7 @@ def _counts() -> dict[str, int]:
 
         return {
             "trials": one("SELECT count(*) FROM trials"),
-            "questions": one("SELECT count(DISTINCT question) FROM trials"),
+            "questions": one("SELECT count(DISTINCT question) FROM trials WHERE source <> 'calibration'"),
             "series": one("SELECT count(*) FROM series"),
             "sources": one("SELECT count(*) FROM sources"),
             "gauntlet_cards": one("SELECT count(*) FROM gauntlet_cards"),

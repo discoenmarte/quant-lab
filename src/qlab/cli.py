@@ -1,6 +1,6 @@
-"""Command line entry point: ``qlab serve``, ``qlab init``, ``qlab demo``.
+"""Command line entry point: ``qlab serve | init | ingest | backtest | gauntlet | calibrate | bench | demo``.
 
-More commands arrive with each milestone (ingest, backtest, gauntlet, calibrate, inbox, mine).
+More commands arrive with each milestone (inbox, mine).
 """
 
 from __future__ import annotations
@@ -110,6 +110,65 @@ def backtest(
         typer.echo(f"  {label:<13} strategy {fmt.format(s[key]):>9}   buy-and-hold {fmt.format(b[key]):>9}")
     typer.echo(f"  trades {rep['stats']['n_trades']}, exposure {s.get('exposure', 0):.0%}, "
                f"cost drag {sum(rep['costs']['per_year'].values()):.2%}/yr")
+
+
+@app.command()
+def gauntlet(
+    symbol: str,
+    strategy: str = typer.Option("trend_sma", help="Registry key; see /api/backtest/strategies"),
+    source: str = typer.Option("yahoo", help="Data source of the symbol"),
+    interval: str = typer.Option("1d", help="Bar interval"),
+    params: str = typer.Option("", help="Candidate parameters, e.g. window=200,entry_band=0.01"),
+    costs: str = typer.Option("auto", help="auto, etf, crypto or zero"),
+    seed: int = typer.Option(7, help="Seed for the grid fill, permutations and bootstrap"),
+) -> None:
+    """Run a candidate through the ten-stage gauntlet and print its report card.
+
+    Args:
+        symbol: Instrument, e.g. SPY or BTCUSDT.
+        strategy: Strategy name.
+        source: Data source.
+        interval: Bar interval.
+        params: Candidate parameters.
+        costs: Cost preset.
+        seed: Random seed.
+    """
+    from .gauntlet.pipeline import run_gauntlet
+
+    card = run_gauntlet(source, symbol, interval, strategy, _parse_params(params), costs, seed, actor="cli")
+    m = card["meta"]
+    typer.echo(f"{m['question']}  card {card['card_id']}  research {m['research'][0]} -> {m['research'][1]}  "
+               f"N = {m['n_trials']}  ({m['elapsed_s']} s)")
+    marks = {True: "PASS", False: "FAIL", None: " -- "}
+    for s in card["stages"]:
+        typer.echo(f"  [{marks[s['passed']]}] {s['name']:<22} {s['summary']}")
+    typer.echo(f"Verdict: {card['verdict'].upper()}" + (f" at {card['failed_stage']}" if card["failed_stage"] else ""))
+
+
+@app.command()
+def calibrate(
+    noise_reps: int = typer.Option(100, help="Runs per family and researcher type on noise markets"),
+    power_reps: int = typer.Option(40, help="Runs per family, edge size and history length on planted trends"),
+    workers: int = typer.Option(0, help="Worker processes; 0 uses all cores but one"),
+) -> None:
+    """Measure the gauntlet's false-positive rate on noise and its power on planted edges.
+
+    Args:
+        noise_reps: Noise runs per family and researcher type.
+        power_reps: Planted-edge runs per setting.
+        workers: Worker processes.
+    """
+    from .gauntlet.calibration import run_calibration
+
+    rep = run_calibration(noise_reps, power_reps, workers=workers or None, log=typer.echo, actor="cli")
+    typer.echo(f"\nReport {rep['id']} ({rep['elapsed_s']} s, {rep['settings']['n_trials']:,} trials recorded)")
+    for r in rep["noise"]:
+        typer.echo(f"  noise  {r['family']:<14} {r['scenario']:<12} {r['admitted']:>3}/{r['n']:<4} "
+                   f"{r['rate']:6.1%}  [{r['low']:.1%}, {r['high']:.1%}]")
+    for r in rep["power"]:
+        typer.echo(f"  power  {r['family']:<14} edge {r['true_edge']:.2f}  {r['years']:>4g} y  "
+                   f"{r['admitted']:>3}/{r['n']:<4} {r['rate']:6.1%}")
+    typer.echo(rep["headline"])
 
 
 @app.command()

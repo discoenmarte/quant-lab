@@ -77,13 +77,14 @@ def spent_questions() -> list[dict[str, Any]]:
 
     Returns:
         Rows ``question, first_peek, n_trials, opened_by_card`` ordered by question. ``opened_by_card`` is set
-        when the gauntlet opened it; otherwise a Studio run peeked.
+        when the gauntlet opened it; otherwise a Studio run peeked. Paper-book trials (``paper:`` questions)
+        are left out: they score forward days and have no lockbox of their own.
     """
     return db.rows(
         """SELECT t.question, min(t.created_at) AS first_peek, count(*) AS n_trials,
                   any_value(u.card_id) AS opened_by_card
            FROM trials t LEFT JOIN lockbox_uses u ON u.question = t.question
-           WHERE t.end_date >= ? AND t.source <> 'calibration'
+           WHERE t.end_date >= ? AND t.source NOT IN ('calibration', 'paper')
            GROUP BY t.question ORDER BY t.question""",
         [sealed_from().date()],
     )

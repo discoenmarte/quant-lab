@@ -158,7 +158,8 @@ def selection_set(symbol: str, interval: str) -> list[dict[str, Any]]:
     rule and a breakout rule on the same instrument is also a choice. Re-running the same parameters on the
     same period isn't a new trial, so exact repeats collapse to one; a different period or different parameters
     count as new trials. Calibration and demo runs are excluded: they are simulated researchers, not choices
-    made about this instrument.
+    made about this instrument. Paper-book trials are excluded too: scoring a fixed decision record on new days
+    chooses nothing.
 
     Args:
         symbol: Instrument, e.g. ``"SPY"``.
@@ -173,7 +174,7 @@ def selection_set(symbol: str, interval: str) -> list[dict[str, Any]]:
                   avg(edge_sharpe) AS edge_sharpe
            FROM trials
            WHERE symbol = ? AND question LIKE ? AND edge_sharpe IS NOT NULL
-             AND source NOT IN ('calibration', 'demo')
+             AND source NOT IN ('calibration', 'demo', 'paper')
            GROUP BY strategy, params, start_date, end_date""",
         [symbol, f"%:{symbol}:{interval}"],
     )

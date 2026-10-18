@@ -13,6 +13,7 @@ import { BacktestStudio } from './pages/BacktestStudio';
 import { DataHealth } from './pages/DataHealth';
 import { Glossary } from './pages/Glossary';
 import { Home } from './pages/Home';
+import { Ledger } from './pages/Ledger';
 import { Placeholder } from './pages/Placeholder';
 import { System } from './pages/System';
 
@@ -21,6 +22,7 @@ const PAGES: Record<string, ReactElement> = {
   '/': <Home />,
   '/data': <DataHealth />,
   '/backtest': <BacktestStudio />,
+  '/ledger': <Ledger />,
   '/system': <System />,
   '/audit': <Audit />,
   '/glossary': <Glossary />,

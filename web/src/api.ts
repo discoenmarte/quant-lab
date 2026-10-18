@@ -59,6 +59,8 @@ export interface QuestionSummary {
   question: string;
   n_trials: number;
   best_sharpe: number | null;
+  best_edge_sharpe?: number | null;
+  first_trial?: string;
   last_trial: string;
 }
 
@@ -200,6 +202,7 @@ export interface BacktestReport {
     trial_id: string | null;
     n_trials: number;
     costs: CostBps;
+    lockbox?: { sealed_from: string; included: boolean; spent: boolean };
   };
   stats: {
     strategy: Record<string, number>;
@@ -246,6 +249,7 @@ export interface TrialRow {
   max_dd: number | null;
   n_obs: number;
   metrics: Record<string, number>;
+  edge_sharpe?: number | null;
 }
 
 export interface SystemInfo extends Clocks {
@@ -257,4 +261,149 @@ export interface SystemInfo extends Clocks {
   database_mb: number;
   counts: Record<string, number>;
   services: { name: string; url: string }[];
+}
+
+export type StageKey =
+  | 'leakage'
+  | 'costs'
+  | 'walk_forward'
+  | 'plateau'
+  | 'permutation'
+  | 'bootstrap'
+  | 'significance'
+  | 'regimes'
+  | 'diversification'
+  | 'lockbox';
+
+export interface StageResult {
+  key: StageKey;
+  name: string;
+  /** True pass, false fail, null when the stage can't reject (sizing, sealed, not applicable). */
+  passed: boolean | null;
+  value: number | null;
+  threshold: string;
+  summary: string;
+  /** Chart payload; its shape differs per stage, and each stage's panel reads only its own fields. */
+  chart: Record<string, any> | null;
+}
+
+export type Verdict = 'candidate' | 'rejected' | 'validated';
+
+export interface GauntletCard {
+  card_id: string;
+  created_at: string;
+  verdict: Verdict;
+  failed_stage: StageKey | null;
+  meta: {
+    question: string;
+    family: string;
+    strategy: string;
+    params: Record<string, number>;
+    source: string;
+    symbol: string;
+    interval: string;
+    costs: CostBps;
+    research: [string, string];
+    lockbox_from: string;
+    lockbox_spent: boolean;
+    grid_size: number;
+    n_trials: number;
+    seed: number;
+    elapsed_s: number;
+    timings: Record<string, number>;
+  };
+  thresholds: Record<string, number | string> & { version: number };
+  stages: StageResult[];
+}
+
+export interface CardRow {
+  card_id: string;
+  created_at: string;
+  question: string;
+  family: string;
+  strategy: string;
+  params: Record<string, number>;
+  symbol: string;
+  verdict: Verdict;
+  stages: { key: StageKey; passed: boolean | null; value: number | null }[];
+  thresholds_version: number;
+}
+
+export interface FunnelRow {
+  key: StageKey;
+  name: string;
+  reached: number;
+  passed: number;
+  failed: number;
+}
+
+export interface ThresholdState {
+  version: number;
+  config: Record<string, number | string>;
+  history: { version: number; created_at: string; reason: string; config: Record<string, number | string> }[];
+}
+
+export interface LockboxState {
+  sealed_from: string;
+  research_end: string;
+  spent: { question: string; first_peek: string; n_trials: number; opened_by_card: string | null }[];
+}
+
+export interface RateRow {
+  n: number;
+  admitted: number;
+  rate: number;
+  low: number;
+  high: number;
+  stages: Record<StageKey, number>;
+}
+
+export interface CalibrationSummary {
+  noise: (RateRow & { family: string; scenario: 'noise_fixed' | 'noise_tuned'; years: number })[];
+  power: (RateRow & { family: string; trend: number; true_edge: number; years: number })[];
+  control: {
+    family: string;
+    years: number;
+    true_edge: number;
+    prior: number;
+    power: number;
+    fpr: number;
+    precision: number | null;
+    random_precision: number;
+    lift: number | null;
+  }[];
+  fpr_overall: number;
+}
+
+export interface CalibrationReport extends CalibrationSummary {
+  id: string;
+  created_at: string;
+  thresholds_version: number;
+  thresholds: Record<string, number | string>;
+  settings: {
+    noise_reps: number;
+    power_reps: number;
+    years: number[];
+    noise_years: number;
+    edges: number[];
+    trend_sizes: Record<string, number>;
+    n_runs: number;
+    n_trials: number;
+  };
+  headline: string;
+  elapsed_s: number;
+}
+
+export interface CalibrationJob {
+  id: string;
+  status: 'running' | 'done' | 'failed';
+  started_at: string;
+  finished_at: string | null;
+  log: string[];
+  report_id: string | null;
+}
+
+export interface LedgerCounts {
+  total: number;
+  by_source: Record<string, number>;
 }

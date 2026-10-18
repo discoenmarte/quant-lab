@@ -80,7 +80,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
         label: 'Ledger',
         icon: 'list',
         milestone: 'M3',
-        ready: false,
+        ready: true,
         blurb: 'Every trial ever run, grouped by research question.',
         planned: ['All trials with filters', 'N per research question', 'Best Sharpe next to its trial count'],
       },

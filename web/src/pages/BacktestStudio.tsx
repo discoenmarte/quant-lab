@@ -111,6 +111,7 @@ export function BacktestStudio() {
   const [costs, setCosts] = useState('auto');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
+  const [includeLockbox, setIncludeLockbox] = useState(false);
   const [report, setReport] = useState<BacktestReport | null>(null);
   const [running, setRunning] = useState(false);
   const [bars, setBars] = useState<BarsResponse | null>(null);
@@ -143,7 +144,7 @@ export function BacktestStudio() {
     try {
       const r = await post<BacktestReport>('/backtest/run', {
         source, symbol, interval, strategy: stratName, params, costs,
-        start: start || null, end: end || null,
+        start: start || null, end: end || null, include_lockbox: includeLockbox,
       });
       setReport(r);
       notify(`Trial ${r.meta.trial_id} recorded. N = ${r.meta.n_trials} on ${r.meta.question}.`, 'ok');
@@ -259,6 +260,10 @@ export function BacktestStudio() {
                 <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
               </label>
             </div>
+            <label className="row small" title="Data from the lockbox date on is sealed. Looking at it spends this question's lockbox for good.">
+              <input type="checkbox" checked={includeLockbox} onChange={(e) => setIncludeLockbox(e.target.checked)} />
+              <span className={includeLockbox ? 'warn' : 'muted'}>Include the lockbox period (spends it for this question)</span>
+            </label>
             <button className="btn primary" onClick={runBacktest} disabled={running || !inst}>
               <Icon name="play" /> {running ? 'Running…' : 'Run backtest'}
             </button>
@@ -272,11 +277,22 @@ export function BacktestStudio() {
               <div className="note">
                 Trial <b className="num">{report.meta.trial_id}</b> on <b>{report.meta.question}</b> ·{' '}
                 <b>N = {report.meta.n_trials}</b> trials on this question · {report.meta.start} → {report.meta.end}.
-                A good Sharpe after many tries means less; the gauntlet (M3) deflates it for N.
+                A good Sharpe after many tries means less; the gauntlet deflates it for N.
+                {report.meta.lockbox && (
+                  <>
+                    {' '}
+                    {report.meta.lockbox.included ? (
+                      <b className="warn">This run reached into the lockbox (from {report.meta.lockbox.sealed_from}); it is spent for this question.</b>
+                    ) : (
+                      <>Stops before the lockbox ({report.meta.lockbox.sealed_from}).</>
+                    )}
+                  </>
+                )}
               </div>
               <div className="stats-row">
                 <Stat label="CAGR" term="cagr" value={pct(s.cagr, 1, true)} tone={tone(s.cagr)} sub={`buy & hold ${pct(b.cagr, 1, true)}`} />
                 <Stat label="Sharpe" term="sharpe" value={num(s.sharpe)} sub={`buy & hold ${num(b.sharpe)} · N = ${report.meta.n_trials}`} />
+                <Stat label="Edge Sharpe" term="edge_sharpe" value={num(s.edge_sharpe)} sub={`beta ${num(s.beta)} · alpha ${pct(s.alpha, 1, true)}/yr`} />
                 <Stat label="Max drawdown" term="max_dd" value={pct(-s.max_dd)} tone="down" sub={`buy & hold ${pct(-b.max_dd)}`} />
                 <Stat label="Volatility" value={pct(s.vol)} sub={`buy & hold ${pct(b.vol)}`} />
                 <Stat label="Exposure" term="exposure" value={pct(s.exposure, 0)} sub={`turnover ${num(s.turnover, 1)}/yr`} />

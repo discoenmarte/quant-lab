@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-17, after M2
+- **Last updated:** 2026-10-18, after M3 (M3b in progress)
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -39,11 +39,15 @@ How to pick this project up and keep building it. Read this, then `README.md`, `
 src/qlab/config.py        paths (QLAB_DATA overrides the data folder; tests use it)
 src/qlab/db.py            DuckDB connection + schema (trials, audit, sources, series, quality_issues,
                           gauntlet_cards, thresholds, lockbox_uses)
-src/qlab/ledger.py        record_trial / count_trials / sharpes / list_trials / questions
+src/qlab/ledger.py        record_trial(s) / count_trials / selection_set / list_trials / questions
+src/qlab/lockbox.py       fixed sealed date, spent questions (from the ledger), clamp_end for Studio runs
 src/qlab/audit.py         log / recent
 src/qlab/timeutil.py      UTC helpers and clocks
 src/qlab/glossary.py      plain-language definitions used by UI tooltips
-src/qlab/backtest/metrics.py   Sharpe, Sortino, CAGR, drawdowns, Calmar, exposure, turnover, monthly returns
+src/qlab/backtest/metrics.py   Sharpe, Sortino, CAGR, drawdowns, Calmar, exposure, turnover, edge (appraisal ratio)
+src/qlab/portfolio/       panel (aligned universes), engine (weights), strategies, leakage, runner, synthetic
+src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, bootstrap), thresholds,
+                          subjects (bars or panel), pipeline (ten stages, cards, lockbox), calibration
 src/qlab/api/main.py      FastAPI app; serves web/dist at /
 src/qlab/api/routes_core.py    /api/health, /system, /overview, /audit, /glossary, POST /demo
 src/qlab/cli.py           qlab serve | init | demo
@@ -65,10 +69,11 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M0 | Foundations | **Done** (tag `m0`). Ledger, audit, metrics, Lab API, CLI, web shell with 4 pages, CI green. |
 | M1 | Data lake | **Done** (tag `m1`). 26 series ingested on 2026-10-17, zero errors. Data Health page. |
 | M2 | Backtest engine | **Done** (tag `m2`). 6 strategies, next-open engine with costs and cash, look-ahead check, Studio. |
-| M3 | Validation gauntlet | **Next.** Spec below. |
-| M4 | Research inbox | Spec below. |
-| M5 | Strategy mining | Spec below. |
-| M6–M9 | Registry, paper trading, go-live gate, intraday | See ROADMAP §6, §6b and §7. |
+| M3 | Validation gauntlet | **Done** (tag `m3`). Ten stages on edge returns, fixed lockbox, calibrated in three studies. |
+| M3b | Portfolio lab | **In progress.** Engine, strategies, portfolio gauntlet and calibration done; web page next. |
+| M7a | Forward paper book | **Next after M3b** (decision 0005). Spec below. |
+| M6, M7b, M4, M5 | Registry, broker paper trading, inbox, mining | In that order (decision 0005). |
+| M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
 ## 5. What M1 and M2 delivered (facts worth knowing)
 
@@ -88,7 +93,42 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 - **Incident:** `.gitignore` once ignored `src/qlab/data` (pattern `data/`); fixed to `/data/`. Ruff skips
   ignored files, which hid lint errors until then.
 
+### What M3 delivered (2026-10-18)
+
+- **Gauntlet** (`qlab gauntlet SPY --strategy trend_sma`, `qlab portfolio-gauntlet multi_asset --strategy tsmom`,
+  Gauntlet page): ten stages on the *edge* beyond buy-and-hold, a grid over the family's parameter space (≤ 300
+  settings, all recorded as trials), N counted across families on the instrument before the run, PSR/DSR with the
+  autocorrelation-adjusted variance (López de Prado, Lipton & Zoonekynd 2026), false-discovery rate, PBO and MinTRL
+  as diagnostics, volatility-preserving permutations, bootstrap sizing, regimes and crashes, diversification
+  against validated cards, and the lockbox. About 3 s per single-instrument run and 3-6 s per portfolio run.
+- **Lockbox:** fixed at 2024-10-01. Spent per question when any trial covers a sealed date. Already spent:
+  `trend_sma:SPY:1d`, `trend_sma:TLT:1d`, `tsmom:BTCUSDT:1d` (M2 Studio runs).
+- **Thresholds:** v1 = calibrated defaults (PBO reported, walk-forward needs a positive OOS edge, permutation
+  p ≤ 0.05); **v2 (in force)** = permutation p ≤ 0.02 after study B showed trend rules at 7% false positives.
+- **Calibration** (`qlab calibrate --seed N`, ~8 min on 12 cores, ~375k trials per study, all under `calib:`
+  questions): study C on fresh seeds passes noise 1.4% (worst family 3%) and catches edge 1.0 / 0.5 95% / 52% of
+  the time with 20 years. Full table in decision 0004.
+- **Bugs found and fixed:** `load_bars` end date included the next day's bar (would have leaked one sealed bar);
+  the Studio and card tables showed blank question columns; additive portfolio legs and a close-to-close portfolio
+  benchmark created fake edges of ±0.7 for equal-weight copies.
+
 ## 6. Specs for the next milestones
+
+### M3b: portfolio lab (in progress)
+
+Done: `qlab.portfolio` (panels for six universes, weights engine, six strategies, look-ahead check, runner with
+reports, synthetic panels), `PanelSubject` in the gauntlet, portfolio calibration scenarios, `/api/portfolio/*`,
+`qlab portfolio` and `qlab portfolio-gauntlet`, tests. Left: the Portfolio Lab page (weights over time, equity
+against equal weight, latest weights, contributions, run the gauntlet from the page), an official calibration
+including portfolios, and the first real portfolio verdicts.
+
+### M7a: forward paper book (next)
+
+Each trading day after the close: compute target weights of every card in the book from data up to that close,
+store them with the UTC time they were decided (before the next bar exists), then score them as bars arrive.
+Append-only, no broker. Start with every validated or candidate portfolio card. Pages: forward P&L against the
+backtest's expected band, days in the book, a CUSUM decay alarm. Scheduling: a launchd job the owner installs.
+
 
 ### M1: data lake (done; kept for reference)
 
@@ -130,7 +170,7 @@ Exit: a full rebuild from scratch works, and quality checks run on every ingest.
 - Web: Backtest Studio (form, stats banner with N, synced charts, monthly heatmap, cost waterfall, trades,
   candles with trade markers).
 
-### M3: validation gauntlet
+### M3: validation gauntlet (done; kept for reference)
 
 Stages in order (see ROADMAP §3): leakage, costs, walk-forward / out-of-sample, plateau (≥ 0.6), permutation
 (p ≤ 0.01), stationary bootstrap (risk), Deflated Sharpe (≥ 0.95, N from the ledger) and PBO via CSCV
@@ -162,8 +202,14 @@ holds at mining scale.
 - The desktop app's preview tool may look for `.claude/launch.json` in an old folder. A config that works:
   `uv run --project <repo> qlab serve --port 8765`. `.claude/` is gitignored.
 - DuckDB allows one writing process. Stop `qlab serve` before long CLI jobs, or trigger them through the API.
-- `ROADMAP.md` was written before implementation; where it differs from decisions 0001-0003, the decisions win
-  (no MLflow, no Dagster yet, Vite instead of Next.js).
+- `ROADMAP.md` was written before implementation; where it differs from decisions 0001-0005, the decisions win
+  (no MLflow, no Dagster yet, Vite instead of Next.js, portfolios and a forward paper book before M4/M5).
+- Every backtest, including quick sanity checks, goes through the ledger. A run that touches 2024-10-01 or later
+  spends that question's lockbox. Use research-period runs (the default) for development.
+- `n_perm` and `perm_max_p` are linked: with n shuffles the smallest p-value is 1/(n+1). Threshold updates
+  that make the permutation stage impossible are refused.
+- Calibration grows `data/lab.duckdb` by about 60 MB per full study.
+- For UI work against a copy of the lab, `.claude/launch.json` has a `lab-scratch` entry that sets `QLAB_DATA`.
 
 ## 8. References
 

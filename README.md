@@ -3,10 +3,12 @@
 [![CI](https://github.com/discoenmarte/quant-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/discoenmarte/quant-lab/actions/workflows/ci.yml)
 
 An evidence-first quant research lab that runs on one machine. It builds a data lake from free sources,
-backtests strategies with realistic costs, puts every candidate through a 10-stage validation gauntlet,
-reads new research papers with a local model, mines strategies on a budget, and shows all of it in a web
-interface. Every backtest is recorded in a trial ledger, so the statistics stay honest about how many things
-were tried.
+backtests single instruments and multi-asset portfolios with realistic costs, puts every candidate through a
+10-stage validation gauntlet calibrated on synthetic markets, and shows all of it in a web interface. Every
+backtest is recorded in a trial ledger, so the statistics stay honest about how many things were tried.
+
+**Calibrated:** with 20 years of daily data the gauntlet catches an edge Sharpe of 1.0 95% of the time and 0.5
+about half the time, and lets noise through 1.4% of the time ([decision 0004](docs/decisions/0004-gauntlet-design.md)).
 
 > Research and paper trading only. Nothing in this repository places real-money orders.
 
@@ -60,7 +62,8 @@ flowchart LR
 |---|---|---|
 | Data | `qlab.data` | Each series is a Parquet file `curated/<source>/<symbol>/<interval>.parquet` with columns `ts` (UTC), `open, high, low, close, volume` (+ `adj_close` when the source has it). Ingestion is idempotent and verifies checksums when the source publishes them. Quality issues go to the `quality_issues` table. |
 | Backtest | `qlab.backtest` | A strategy is a pure function `positions = f(bars, **params)` that may only use data up to each bar. The engine applies positions from the next bar, charges costs on every change, and returns daily returns, positions and trades. |
-| Gauntlet | `qlab.gauntlet` | Takes a strategy, its parameter grid and the bars. Returns a report card: ten stages, each with value, threshold, pass/fail and chart data. Thresholds are versioned in the database. |
+| Portfolio | `qlab.portfolio` | A panel aligns several instruments on the dates they share. A portfolio strategy is a pure function `weights = f(panel, **params)`; the engine fills at the next open with per-instrument costs and judges against equal weight through the same engine. |
+| Gauntlet | `qlab.gauntlet` | Judges a *subject* (a single-instrument rule or a portfolio rule) over its family's parameter grid, on research data before the fixed lockbox date, on the edge beyond buy-and-hold. Returns a report card: ten stages with value, threshold, pass/fail and chart data. Thresholds are versioned and calibrated on synthetic markets. |
 | Ledger | `qlab.ledger`, `qlab.audit` | Append-only. Every backtest is a trial on a research question; every action is an audit event. |
 | Inbox | `qlab.inbox` | Papers become structured `StrategySpec` records through an LLM provider interface (local Ollama by default). |
 | Mining | `qlab.mining` | Budgeted search over a strategy grammar. Every candidate is a ledger trial, and the significance bar rises with N. |
@@ -96,11 +99,12 @@ flowchart LR
 | M0 | Foundations | Package, ledger, audit log, Lab API, web shell, CI | done |
 | M1 | Data lake | Free sources (ETFs, BTC/ETH, factors), quality checks, Data Health page | done |
 | M2 | Backtest engine | Strategy library, cost model, metrics, Backtest Studio | done |
-| M3 | Validation gauntlet | 10 stages, calibration on synthetic data, Gauntlet Console, Ledger page | next |
+| M3 | Validation gauntlet | 10 stages on edge returns, fixed lockbox, calibration (three studies), Gauntlet Console, Ledger page | done |
+| M3b | Portfolio lab | Multi-asset panels, weights engine, six diversified strategies, portfolio gauntlet and calibration | next |
 | M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
 | M6 | Registry and alerts | Strategy board, portfolio, alert rules | planned |
-| M7 | Paper trading | Paper broker on live public data, trading desk, kill switch | planned |
+| M7 | Paper trading | Forward paper book first (M7a, moved up by [decision 0005](docs/decisions/0005-portfolios-and-forward-evidence-first.md)), then broker paper trading, trading desk, kill switch | planned |
 | M8 | Go-live gate | Evidence checklist, limits outside any model | planned |
 | M9 | Intraday mode | Validated intraday library, morning selector, replay | planned |
 
@@ -110,7 +114,7 @@ The full plan, with each milestone's screens, costs and the research it rests on
 ## Repository layout
 
 ```
-src/qlab/          Python package (data, backtest, gauntlet, inbox, mining, api, ledger, audit)
+src/qlab/          Python package (data, backtest, portfolio, gauntlet, api, ledger, lockbox, audit)
 tests/             pytest suite; each test gets its own data folder
 web/               React app (Vite + TypeScript)
 docs/STYLE.md      docstring and commit conventions
@@ -124,3 +128,5 @@ data/              local data lake and database (not committed)
 1. [Python first, Rust where a measurement says so](docs/decisions/0001-python-first-rust-where-measured.md)
 2. [Reverse-engineering is an audit tool, not an alpha source](docs/decisions/0002-rea-scope.md)
 3. [Keep the stack small](docs/decisions/0003-orchestration-and-ui-stack.md)
+4. [Gauntlet design: edge returns, a fixed lockbox, honest N, thresholds from calibration](docs/decisions/0004-gauntlet-design.md)
+5. [Portfolios and forward evidence before the paper inbox and mining](docs/decisions/0005-portfolios-and-forward-evidence-first.md)

@@ -215,3 +215,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .costbar .pos { background: rgba(52, 211, 153, 0.7); }
 .costbar .neg { background: rgba(248, 113, 113, 0.7); }
 @media (max-width: 1100px) { .studio { grid-template-columns: 1fr; } }
+
+/* Gauntlet */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tab { font: inherit; font-size: 13px; padding: 8px 14px; background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.stage-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.stage-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border-2); color: var(--muted); background: var(--panel); }
+.stage-pill:hover { text-decoration: none; border-color: var(--accent); }
+.stage-pill.ok { color: var(--ok); border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.06); }
+.stage-pill.bad { color: var(--bad); border-color: rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.07); }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--border-2); }
+.dot.ok { background: var(--ok); }
+.dot.bad { background: var(--bad); }
+pre.small { margin: 0 0 10px; white-space: pre-wrap; }

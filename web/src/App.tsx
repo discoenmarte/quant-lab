@@ -11,6 +11,7 @@ import { NAV, NAV_ITEMS } from './nav';
 import { Audit } from './pages/Audit';
 import { BacktestStudio } from './pages/BacktestStudio';
 import { DataHealth } from './pages/DataHealth';
+import { Gauntlet } from './pages/Gauntlet';
 import { Glossary } from './pages/Glossary';
 import { Home } from './pages/Home';
 import { Ledger } from './pages/Ledger';
@@ -22,6 +23,7 @@ const PAGES: Record<string, ReactElement> = {
   '/': <Home />,
   '/data': <DataHealth />,
   '/backtest': <BacktestStudio />,
+  '/gauntlet': <Gauntlet />,
   '/ledger': <Ledger />,
   '/system': <System />,
   '/audit': <Audit />,

@@ -66,7 +66,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
         label: 'Gauntlet',
         icon: 'shield',
         milestone: 'M3',
-        ready: false,
+        ready: true,
         blurb: 'Ten tests a strategy must pass before paper trading.',
         planned: [
           'Report card with ten stage badges',

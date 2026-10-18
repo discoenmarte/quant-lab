@@ -260,6 +260,7 @@ def run_calibration(
         ``control``, ``fpr_overall``, ``headline`` and ``elapsed_s``.
     """
     started = time.perf_counter()
+    code = code_version()  # stamped before the runs, so later edits to the working tree can't mislabel them
     version, th = thresholds.current()
     run_id = uuid.uuid4().hex[:8]
 
@@ -317,7 +318,7 @@ def run_calibration(
                      "noise_years": noise_years, "edges": list(edges), "trend_sizes": {str(k): v for k, v in
                                                                                       sizes.items()},
                      "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed,
-                     "code": code_version()},
+                     "code": code},
         **summarise(runs, th),
         "runs": [{k: r[k] for k in ("scenario", "family", "years", "trend", "seed", "values", "admitted",
                                     "failed_stage")} for r in runs],

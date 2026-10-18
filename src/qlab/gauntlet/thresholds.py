@@ -9,6 +9,11 @@ from the roadmap's values, 1,000 noise runs passed 0% of the time, but a true ed
 buying protection: PBO (a coin flip on a plateau, even for a real edge), the walk-forward ratio, and a
 permutation level of 0.01 on top of the Deflated Sharpe. Without them, noise passes 2.0% of the time and the
 same edge is caught 68% of the time, close to the ~73% ceiling of a single one-sided 5% test.
+
+A confirmation study on fresh seeds then showed the pooled rate hiding a family problem: trend rules fixed in
+advance passed noise 7% of the time, because the permutation test and the Deflated Sharpe are almost perfectly
+correlated and both run slightly hot under volatility clustering. The permutation level is therefore 0.02, which
+keeps every family at or below 5%, at the cost of catching that edge about 48% of the time with 20 years.
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ DEFAULT: dict[str, Any] = {
     "wf_min_oos_sharpe": 0.0,      # walk-forward: out-of-sample edge Sharpe must exceed this
     "wf_min_ratio": 0.0,           # walk-forward: out-of-sample at least this share of in-sample (0 = off)
     "plateau_min": 0.6,            # plateau: share of neighbouring settings that also work
-    "perm_max_p": 0.05,            # permutation: p-value must be at most this (one pre-specified rule)
+    "perm_max_p": 0.02,            # permutation: p-value must be at most this (one pre-specified rule)
     "n_perm": 500,                 # permutation: number of shuffled histories
     "n_boot": 1000,                # bootstrap: number of resampled paths
     "boot_block": 20,              # bootstrap: mean block length in days

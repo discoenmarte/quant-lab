@@ -42,7 +42,7 @@ from ..data import store
 from ..data.ingest import SOURCES
 from ..timeutil import naive_utc
 from . import stats, thresholds
-from .nulls import permuted_bars, stationary_bootstrap
+from .nulls import permuter, stationary_bootstrap
 from .pbo import pbo
 
 STAGES = [
@@ -478,7 +478,8 @@ def evaluate(
     ))
     lap("plateau")
 
-    # 5. Permutation: the same bars in random order, the same rule and costs. Skill beats shuffled timing.
+    # 5. Permutation: the same bars in random order (keeping the volatility path), the same rule and costs.
+    # Skill beats shuffled timing.
     rf_res = None if rf is None else rf[mask].reset_index(drop=True)
 
     def perm_stat(pb: pd.DataFrame) -> float:
@@ -490,7 +491,8 @@ def evaluate(
 
     real = perm_stat(research_bars)
     n_perm = int(th["n_perm"])
-    null = np.array([perm_stat(permuted_bars(research_bars, rng)) for _ in range(n_perm)])
+    draw = permuter(research_bars)
+    null = np.array([perm_stat(draw(rng)) for _ in range(n_perm)])
     null = np.where(np.isfinite(null), null, 0.0)
     beat = int(np.sum(null >= real)) if math.isfinite(real) else n_perm
     p_value = (1 + beat) / (1 + n_perm)

@@ -93,14 +93,21 @@ def test_edge_removes_static_exposure():
     assert metrics.sharpe(skilled, None, 252) > 1.5
 
 
-def test_permuted_bars_keep_total_return_and_valid_ranges():
-    """Shuffling keeps the start, the end and every bar's shape, and the bars stay valid."""
-    bars = bars_from(np.random.default_rng(1).normal(0.0003, 0.01, 500))
+def test_permuted_bars_stay_valid_and_keep_what_they_should():
+    """A raw shuffle keeps the total return; the studentised shuffle keeps the volatility path."""
+    bars = calibration.synthetic_bars(10, 0.0, seed=4)
+    raw = permuted_bars(bars, np.random.default_rng(9), keep_vol=False)
+    assert raw["close"].iloc[-1] == pytest.approx(bars["close"].iloc[-1])
     pb = permuted_bars(bars, np.random.default_rng(9))
-    assert pb["close"].iloc[-1] == pytest.approx(bars["close"].iloc[-1])
     assert (pb["high"] >= pb[["open", "close"]].max(axis=1) - 1e-9).all()
     assert (pb["low"] <= pb[["open", "close"]].min(axis=1) + 1e-9).all()
     assert not np.allclose(pb["close"], bars["close"])
+
+    def rolling_vol(b: pd.DataFrame) -> pd.Series:
+        return np.log(b["close"]).diff().rolling(63).std()
+
+    real = rolling_vol(bars)
+    assert real.corr(rolling_vol(pb)) > 0.6 > real.corr(rolling_vol(raw))
 
 
 def test_bootstrap_sizes_down_a_risky_stream():

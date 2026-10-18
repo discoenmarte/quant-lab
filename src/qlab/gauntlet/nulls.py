@@ -1,8 +1,13 @@
 """Null worlds: shuffled price histories for the permutation test, and resampled futures for risk.
 
 The permutation test (after Masters, 2020) asks: does the strategy do better on the real history than on
-histories with the same bars in a random order? Shuffling keeps every bar's size and the overall drift but
-destroys trends, cycles and regimes, which is exactly what a timing strategy claims to exploit.
+histories with the same bars in a random order? Shuffling keeps every bar's shape and roughly the overall drift
+but destroys trends, cycles and regimes, which is exactly what a timing strategy claims to exploit.
+
+A plain shuffle also destroys volatility clustering, and that makes the test too lenient: calibration on GARCH
+markets with no edge passed a 200-day trend rule 8% of the time at p <= 0.05. So bars are shuffled in units of
+their local volatility and put back at the volatility of the place they land (a studentised permutation). The
+null world keeps the real calm and turbulent stretches; only the direction and order of the moves are random.
 
 The stationary bootstrap (Politis & Romano, 1994) resamples blocks of the strategy's own returns to show the
 range of drawdowns and growth it could produce. It measures risk; it is not evidence of an edge.
@@ -10,6 +15,7 @@ range of drawdowns and growth it could produce. It measures risk; it is not evid
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -18,45 +24,86 @@ import pandas as pd
 from ..backtest import metrics
 from ..data.bars import adjusted
 
+EWMA_LAMBDA = 0.94  # RiskMetrics daily decay
 
-def permuted_bars(bars: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
-    """A copy of the bars with their order shuffled, rebuilt into a continuous price path.
 
-    Each bar is described by its overnight gap, its open-to-close move and its high/low excursions. Those
-    descriptions are shuffled together (bar 0 stays first) and chained from the first close. Shapes come from
-    dividend-adjusted prices, so the shuffled world earns the same total return, dividends included, as the
-    real one.
+def local_vol(log_returns: np.ndarray, lam: float = EWMA_LAMBDA) -> np.ndarray:
+    """Volatility forecast per period from an exponentially weighted average of past squared returns.
+
+    Args:
+        log_returns: Log returns per period.
+        lam: Decay; 0.94 is the RiskMetrics daily value (an effective window of about 16 days).
+
+    Returns:
+        Positive volatility per period, each using only earlier returns (the first uses the first 20).
+    """
+    r = np.nan_to_num(np.asarray(log_returns, dtype=float))
+    var = np.empty(len(r))
+    v = float(np.mean(r[:20] ** 2)) if len(r) else 0.0
+    for i, x in enumerate(r):
+        var[i] = v
+        v = lam * v + (1 - lam) * x * x
+    floor = max(float(np.median(var)) * 1e-4, 1e-16)
+    return np.sqrt(np.maximum(var, floor))
+
+
+def permuter(bars: pd.DataFrame, keep_vol: bool = True) -> Callable[[np.random.Generator], pd.DataFrame]:
+    """Prepare a history for shuffling and return a function that draws one shuffled copy per call.
+
+    Each bar is described by its overnight gap, its open-to-close move and its high/low excursions, all in log
+    terms. With ``keep_vol`` those are divided by the bar's local volatility, shuffled together (bar 0 stays
+    first), multiplied by the local volatility at their new position, and chained from the first close. Shapes
+    come from dividend-adjusted prices, so dividends are part of the drift. The decomposition and the volatility
+    path are computed once, so each draw costs one shuffle.
+
+    Args:
+        bars: Normalised bars with a positional index.
+        keep_vol: Keep the real volatility path (studentised shuffle). False shuffles raw bars, which keeps the
+            total return exactly but loses volatility clustering.
+
+    Returns:
+        ``draw(rng)`` giving bars with the same timestamps, in random order. ``adj_close`` equals ``close``,
+        since the adjustment is already in the prices.
+    """
+    base = adjusted(bars)
+    o, h, low, c = (base[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+    parts = np.vstack([
+        np.log(o[1:] / c[:-1]),
+        np.log(c[1:] / o[1:]),
+        np.log(h[1:] / np.maximum(o[1:], c[1:])),
+        np.log(low[1:] / np.minimum(o[1:], c[1:])),
+    ])
+    vol = local_vol(parts[0] + parts[1]) if keep_vol else np.ones(parts.shape[1])
+    unit = parts / vol
+
+    def draw(rng: np.random.Generator) -> pd.DataFrame:
+        gap, body, up, down = np.exp(unit[:, rng.permutation(unit.shape[1])] * vol)
+        opens = c[0] * np.cumprod(gap * np.concatenate([[1.0], body[:-1]]))
+        closes = opens * body
+        out = base.copy()
+        out["open"] = np.concatenate([[o[0]], opens])
+        out["close"] = np.concatenate([[c[0]], closes])
+        out["high"] = np.concatenate([[h[0]], np.maximum(opens, closes) * up])
+        out["low"] = np.concatenate([[low[0]], np.minimum(opens, closes) * down])
+        if "adj_close" in out:
+            out["adj_close"] = out["close"]
+        return out
+
+    return draw
+
+
+def permuted_bars(bars: pd.DataFrame, rng: np.random.Generator, keep_vol: bool = True) -> pd.DataFrame:
+    """One shuffled copy of a history (see ``permuter``, which is faster for many draws).
 
     Args:
         bars: Normalised bars with a positional index.
         rng: Random generator.
+        keep_vol: Keep the real volatility path.
 
     Returns:
-        Bars with the same timestamps and the same per-bar shapes, in random order. ``adj_close`` equals
-        ``close``, since the adjustment is already in the prices.
+        Bars with the same timestamps, in random order.
     """
-    bars = adjusted(bars)
-    o, h, low, c = (bars[k].to_numpy(float) for k in ("open", "high", "low", "close"))
-    gap = o[1:] / c[:-1]
-    body = c[1:] / o[1:]
-    up = h[1:] / np.maximum(o[1:], c[1:])
-    down = low[1:] / np.minimum(o[1:], c[1:])
-    order = rng.permutation(len(gap))
-    gap, body, up, down = gap[order], body[order], up[order], down[order]
-
-    new_o = np.empty_like(o)
-    new_c = np.empty_like(c)
-    new_o[0], new_c[0] = o[0], c[0]
-    opens = c[0] * np.cumprod(gap * np.concatenate([[1.0], body[:-1]]))
-    new_o[1:] = opens
-    new_c[1:] = opens * body
-    out = bars.copy()
-    out["open"], out["close"] = new_o, new_c
-    out["high"] = np.concatenate([[h[0]], np.maximum(new_o[1:], new_c[1:]) * up])
-    out["low"] = np.concatenate([[low[0]], np.minimum(new_o[1:], new_c[1:]) * down])
-    if "adj_close" in out:
-        out["adj_close"] = out["close"]
-    return out
+    return permuter(bars, keep_vol)(rng)
 
 
 def stationary_bootstrap(

@@ -108,6 +108,9 @@ MIGRATIONS = [
     # M1: series carry their kind (bars or factors) and a content hash.
     "ALTER TABLE series ADD COLUMN IF NOT EXISTS kind VARCHAR",
     "ALTER TABLE series ADD COLUMN IF NOT EXISTS data_hash VARCHAR",
+    # M3: the Sharpe of the return beyond static benchmark exposure, which the gauntlet's statistics use.
+    "ALTER TABLE trials ADD COLUMN IF NOT EXISTS edge_sharpe DOUBLE",
+    "ALTER TABLE lockbox_uses ADD COLUMN IF NOT EXISTS reason VARCHAR",
 ]
 
 

@@ -15,6 +15,7 @@ import { Gauntlet } from './pages/Gauntlet';
 import { Glossary } from './pages/Glossary';
 import { Home } from './pages/Home';
 import { Ledger } from './pages/Ledger';
+import { PortfolioLab } from './pages/PortfolioLab';
 import { Placeholder } from './pages/Placeholder';
 import { System } from './pages/System';
 
@@ -23,6 +24,7 @@ const PAGES: Record<string, ReactElement> = {
   '/': <Home />,
   '/data': <DataHealth />,
   '/backtest': <BacktestStudio />,
+  '/portfolio': <PortfolioLab />,
   '/gauntlet': <Gauntlet />,
   '/ledger': <Ledger />,
   '/system': <System />,

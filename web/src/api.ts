@@ -407,3 +407,37 @@ export interface LedgerCounts {
   total: number;
   by_source: Record<string, number>;
 }
+
+export interface PortfolioUniverse {
+  name: string;
+  description: string;
+  members: string[];
+  /** First date every member has a bar; null when something isn't ingested. */
+  first: string | null;
+  n_days: number;
+}
+
+export interface PortfolioReport {
+  meta: {
+    question: string;
+    strategy: string;
+    family: string;
+    params: Record<string, number>;
+    universe: string;
+    symbols: string[];
+    start: string;
+    end: string;
+    trial_id: string | null;
+    n_trials: number;
+    lockbox: { sealed_from: string; included: boolean; spent: boolean };
+  };
+  stats: { strategy: Record<string, number>; benchmark: Record<string, number> };
+  series: { time: number[]; equity: number[]; benchmark: number[]; drawdown: number[]; gross: number[] };
+  /** Weight held per instrument at each point of ``series.time``. */
+  weights: Record<string, number[]>;
+  latest: Record<string, number>;
+  /** Average yearly return contributed by each instrument. */
+  contribution: Record<string, number>;
+  monthly: { year: number; month: number; ret: number }[];
+  costs: { per_year: number; cash_per_year: number; turnover_per_year: number };
+}

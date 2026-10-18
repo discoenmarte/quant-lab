@@ -15,6 +15,7 @@ const PATHS = {
   book: 'M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21V5',
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5',
   play: 'M8 5l11 7-11 7z',
+  layers: 'M12 3l9 5-9 5-9-5zM3 12l9 5 9-5M3 16.5l9 5 9-5',
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -62,6 +62,15 @@ export const NAV: { group: string; items: NavItem[] }[] = [
         ],
       },
       {
+        path: '/portfolio',
+        label: 'Portfolio Lab',
+        icon: 'layers',
+        milestone: 'M3b',
+        ready: true,
+        blurb: 'Diversified rules across asset classes, judged against equal weight.',
+        planned: ['Weights over time', 'Equity against equal weight', 'Contributions per instrument'],
+      },
+      {
         path: '/gauntlet',
         label: 'Gauntlet',
         icon: 'shield',

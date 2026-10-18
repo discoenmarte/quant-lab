@@ -15,8 +15,11 @@ Design:
   does choosing parameters on the past work in the future, is it a lone peak, is it better than random
   timing, how much can it lose, is it the best of many by luck, does it only work in one kind of market, does
   it add anything, and does it hold up on data nobody has seen.
+- **Any subject.** The stages see a subject (``subjects.py``) that supplies returns for any parameter setting,
+  a look-ahead check, permutation worlds and the sealed period: a single-instrument rule on bars, or a portfolio
+  rule on a multi-asset panel. One gauntlet, one set of thresholds, one calibration story.
 - ``evaluate`` is pure (no database), so calibration can run it on synthetic markets in parallel processes.
-  ``run_gauntlet`` wraps it with the ledger, the report card and the audit log.
+  ``run_gauntlet`` and ``run_portfolio_gauntlet`` wrap it with the ledger, the report card and the audit log.
 - Statistics use daily returns (intraday results are compounded per UTC day).
 """
 
@@ -34,16 +37,14 @@ import numpy as np
 import pandas as pd
 
 from .. import audit, code_version, config, db, ledger, lockbox
-from ..backtest import metrics, runner
-from ..backtest.engine import CostModel, run
-from ..backtest.leakage import future_shift_check
-from ..backtest.strategies import REGISTRY, Strategy
-from ..data import store
-from ..data.ingest import SOURCES
+from ..backtest import metrics
 from ..timeutil import naive_utc
 from . import stats, thresholds
-from .nulls import permuter, stationary_bootstrap
+from .nulls import stationary_bootstrap
 from .pbo import pbo
+from .subjects import BarSubject, PanelSubject, days_per_year, subject_from_meta, to_daily
+
+__all__ = ["STAGES", "days_per_year", "to_daily", "evaluate", "judge", "run_gauntlet", "run_portfolio_gauntlet"]
 
 STAGES = [
     ("leakage", "Look-ahead"),
@@ -85,37 +86,7 @@ class Stage:
     chart: dict[str, Any] | None = None
 
 
-def days_per_year(source: str) -> int:
-    """Trading days per year for daily statistics.
-
-    Args:
-        source: Source name.
-
-    Returns:
-        365 for crypto, 252 otherwise.
-    """
-    return 365 if SOURCES.get(source) and SOURCES[source].asset_class == "crypto" else 252
-
-
-def to_daily(returns: np.ndarray | pd.Series, ts: pd.Series) -> pd.Series:
-    """Compound per-bar returns into daily returns.
-
-    Args:
-        returns: Per-bar returns.
-        ts: Bar timestamps aligned with ``returns``.
-
-    Returns:
-        Daily returns indexed by UTC date. Daily bars pass through unchanged.
-    """
-    idx = pd.DatetimeIndex(ts).tz_convert("UTC")
-    values = np.asarray(returns, dtype=float)
-    day = idx.normalize()
-    if day.is_unique:
-        return pd.Series(values, index=day)
-    return (1.0 + pd.Series(values, index=day)).groupby(level=0).prod() - 1.0
-
-
-def build_grid(strat: Strategy, params: dict[str, float], cap: int, seed: int = 0) -> list[dict[str, float]]:
+def build_grid(strat: Any, params: dict[str, float], cap: int, seed: int = 0) -> list[dict[str, float]]:
     """Candidate first, then settings across the family's parameter space.
 
     The full grid runs from each parameter's ``low`` to ``high`` in ``step`` increments. Above ``cap``
@@ -124,7 +95,7 @@ def build_grid(strat: Strategy, params: dict[str, float], cap: int, seed: int = 
     cap, and fills the rest at random up to it.
 
     Args:
-        strat: Strategy whose parameter ranges define the grid.
+        strat: Anything with ``params`` (a strategy or a subject); its ranges define the grid.
         params: Candidate parameters.
         cap: Most settings to return.
         seed: Seed for the random fill.
@@ -301,14 +272,9 @@ def judge(v: dict[str, float], th: dict[str, Any]) -> dict[str, bool | None]:
 
 
 def evaluate(
-    bars: pd.DataFrame,
-    strat: Strategy,
+    subject: BarSubject | PanelSubject,
     cand_params: dict[str, float],
-    model: CostModel,
-    rf: pd.Series | None,
     *,
-    dpy: int,
-    sealed_from: pd.Timestamp,
     th: dict[str, Any],
     selection: list[float] | None = None,
     candidate_counted: bool = False,
@@ -322,13 +288,8 @@ def evaluate(
     the caller to store, and every later candidate on the instrument is deflated against it.
 
     Args:
-        bars: Full history of normalised bars, positional index.
-        strat: Strategy to judge.
+        subject: What to judge (see ``subjects``); only its research period is used.
         cand_params: Candidate parameters (complete).
-        model: Cost model.
-        rf: Risk-free return per bar, aligned with ``bars``. None means zero.
-        dpy: Days per year for annualising daily statistics.
-        sealed_from: First lockbox date; only earlier bars are used.
         th: Thresholds (see ``thresholds.DEFAULT``).
         selection: Annual edge Sharpes of the distinct trials the candidate was chosen from. None means none.
         candidate_counted: True when the candidate itself (same parameters, same research period) is already
@@ -353,25 +314,16 @@ def evaluate(
         t0 = time.perf_counter()
 
     rng = np.random.default_rng(seed)
-    mask = (bars["ts"] < sealed_from).to_numpy()
-    ts_r = bars["ts"][mask]
-    days = to_daily(np.zeros(mask.sum()), ts_r).index
+    dpy, days = subject.dpy, subject.days
     if len(days) < 3 * dpy:
         raise ValueError("need at least three years of research data before the lockbox")
-    research_bars = bars[mask].reset_index(drop=True)
-    research = [str(ts_r.iloc[0].date()), str(ts_r.iloc[-1].date())]
+    research = list(subject.research)
 
     # Grid: every setting on the full history, sliced to the research period, as daily returns.
-    grid = build_grid(strat, cand_params, int(th["grid_max"]), seed)
-    cols, cand_res = [], None
-    for cfg in grid:
-        res = run(bars, strat.positions(bars, cfg), model, rf, with_trades=False)
-        if cand_res is None:
-            cand_res = res
-        cols.append(to_daily(res.returns.to_numpy()[mask], ts_r).to_numpy())
-    R = np.column_stack(cols)
-    bench = to_daily(cand_res.benchmark.to_numpy()[mask], ts_r).to_numpy()
-    rf_d = np.zeros(len(days)) if rf is None else to_daily(rf.to_numpy()[mask], ts_r).to_numpy()
+    grid = build_grid(subject, cand_params, int(th["grid_max"]), seed)
+    sims = [subject.simulate(cfg) for cfg in grid]
+    R = np.column_stack([sim.net for sim in sims])
+    bench, rf_d = sims[0].bench, subject.rf
     E, betas = edge_matrix(R - rf_d[:, None], bench - rf_d)
     edge_sr = column_sharpes(E)  # daily
     cand_e = E[:, 0]
@@ -390,7 +342,7 @@ def evaluate(
     values: dict[str, float] = {}
 
     # 1. Look-ahead: changing future bars must not change any earlier position.
-    leak = future_shift_check(strat, research_bars, cand_params, seed=seed)
+    leak = subject.leak_check(cand_params, seed)
     values["leak"] = 1.0 if leak["passed"] else 0.0
     stages.append(Stage(
         "leakage", "Look-ahead", leak["passed"], None, "no past position changes",
@@ -400,21 +352,21 @@ def evaluate(
     lap("leakage")
 
     # 2. Costs: positive net growth and positive edge after every fee, spread and slippage.
-    gross = to_daily((cand_res.gross + cand_res.cash).to_numpy()[mask], ts_r).to_numpy()
+    gross = sims[0].gross
     gross_e, _ = metrics.edge(gross, bench, rf_d)
     gross_edge = _ann(stats.sharpe(gross_e), dpy)
     net_cagr = metrics.cagr(R[:, 0], dpy)
-    turnover = float(np.abs(np.diff(cand_res.position.to_numpy()[mask], prepend=0.0)).sum()) / (len(days) / dpy)
+    turnover = sims[0].turnover
     gross_alpha = float(np.nanmean(gross_e) * dpy)
     breakeven_bps = gross_alpha / turnover * 1e4 if turnover > 0 else float("inf")
     values.update(edge=cand_edge, net_cagr=net_cagr)
     stages.append(Stage(
         "costs", "After costs", None, cand_edge, f"edge Sharpe > {th['min_net_sharpe']} and CAGR > 0",
         f"Edge Sharpe {_f(cand_edge)} after costs ({_f(gross_edge)} before); net CAGR {_f(net_cagr, '{:+.1%}')}; "
-        f"costs break even at {_f(breakeven_bps, '{:.0f}')} bps per trade vs {model.per_unit * 1e4:.1f} charged.",
+        f"costs break even at {_f(breakeven_bps, '{:.0f}')} bps per trade vs {subject.cost_bps:.1f} charged.",
         {"gross_edge_sharpe": gross_edge, "net_edge_sharpe": cand_edge, "net_cagr": net_cagr,
          "gross_cagr": metrics.cagr(gross, dpy), "turnover": turnover, "breakeven_bps": breakeven_bps,
-         "cost_bps": model.per_unit * 1e4, "beta": float(betas[0]), "alpha": float(np.nanmean(cand_e) * dpy)},
+         "cost_bps": subject.cost_bps, "beta": float(betas[0]), "alpha": float(np.nanmean(cand_e) * dpy)},
     ))
     lap("costs")
 
@@ -454,8 +406,8 @@ def evaluate(
     lap("walk_forward")
 
     # 4. Plateau: settings one step away should work too; a lone peak is a fluke.
-    names = list(strat.params)
-    steps = {k: strat.params[k].step for k in names}
+    names = list(subject.params)
+    steps = {k: subject.params[k].step for k in names}
     neighbours = [i for i, cfg in enumerate(grid) if i > 0
                   and all(abs(cfg[k] - cand_params[k]) <= steps[k] + 1e-9 for k in names)]
     floor = max(0.0, 0.5 * cand_edge) if math.isfinite(cand_edge) else 0.0
@@ -480,19 +432,8 @@ def evaluate(
 
     # 5. Permutation: the same bars in random order (keeping the volatility path), the same rule and costs.
     # Skill beats shuffled timing.
-    rf_res = None if rf is None else rf[mask].reset_index(drop=True)
-
-    def perm_stat(pb: pd.DataFrame) -> float:
-        res = run(pb, strat.positions(pb, cand_params), model, rf_res, with_trades=False)
-        r_d = to_daily(res.returns.to_numpy(), pb["ts"]).to_numpy()
-        b_d = to_daily(res.benchmark.to_numpy(), pb["ts"]).to_numpy()
-        e, _ = metrics.edge(r_d - rf_d, b_d - rf_d)
-        return _ann(stats.sharpe(e), dpy)
-
-    real = perm_stat(research_bars)
     n_perm = int(th["n_perm"])
-    draw = permuter(research_bars)
-    null = np.array([perm_stat(draw(rng)) for _ in range(n_perm)])
+    real, null = subject.permutation(cand_params, n_perm, rng)
     null = np.where(np.isfinite(null), null, 0.0)
     beat = int(np.sum(null >= real)) if math.isfinite(real) else n_perm
     p_value = (1 + beat) / (1 + n_perm)
@@ -602,7 +543,7 @@ def evaluate(
     # 10. Lockbox: sealed until opened, once per question.
     stages.append(Stage(
         "lockbox", "Lockbox", None, None, "edge Sharpe inside the one-sided 95% band of the research result",
-        f"Sealed: {sealed_from.date()} onward. Opened once per research question.",
+        f"Sealed: {subject.sealed.date()} onward. Opened once per research question.",
     ))
 
     verdicts = judge(values, th)
@@ -628,23 +569,94 @@ def validated_portfolio(exclude_question: str | None = None) -> pd.Series | None
     """
     cards = [c for c in list_cards(500) if c["verdict"] == "validated" and c["question"] != exclude_question]
     series = []
+    sealed = lockbox.sealed_from()
     for c in cards:
-        full = load_card(c["card_id"])
-        m = full["meta"]
+        m = load_card(c["card_id"])["meta"]
         try:
-            bars = runner.load_bars(m["source"], m["symbol"], m["interval"])
-        except FileNotFoundError:
+            subject = subject_from_meta(m, sealed)
+        except (FileNotFoundError, KeyError):
             continue
-        strat = REGISTRY.get(m["strategy"])
-        if strat is None:
-            continue
-        rf = runner.risk_free(m["source"], bars, m["interval"])
-        res = run(bars, strat.positions(bars, m["params"]), runner.resolve_costs(m["costs"], m["source"]), rf,
-                  with_trades=False)
-        series.append(to_daily(res.returns.to_numpy(), bars["ts"]).rename(c["card_id"]))
+        series.append(subject.full_daily(m["params"]).rename(c["card_id"]))
     if not series:
         return None
     return pd.concat(series, axis=1).mean(axis=1, skipna=True)
+
+
+def _complete(strat: Any, params: dict[str, float] | None) -> dict[str, float]:
+    """Candidate parameters with defaults filled in and integers as int.
+
+    Args:
+        strat: A registered strategy (single-instrument or portfolio).
+        params: Overrides.
+
+    Returns:
+        Every parameter of the strategy.
+    """
+    merged = {**strat.defaults(), **(params or {})}
+    return {k: (int(v) if strat.params[k].is_int else float(v)) for k, v in merged.items()}
+
+
+def judge_subject(
+    subject: BarSubject | PanelSubject, params: dict[str, float] | None, seed: int = 7, actor: str = "user"
+) -> dict[str, Any]:
+    """Run the gauntlet on a subject, record its grid as trials, and save the report card.
+
+    The Deflated Sharpe counts the distinct trials on the subject's scope (instrument or universe) that existed
+    before this run, plus the candidate. The run's grid is recorded afterwards.
+
+    Args:
+        subject: What to judge.
+        params: Candidate parameters; missing ones take their defaults.
+        seed: Seed for the grid fill, permutations and bootstrap, for reproducibility.
+        actor: Who ran it, for the audit log.
+
+    Returns:
+        The report card: ``card_id``, ``verdict`` (``candidate`` or ``rejected``), ``failed_stage``, the
+        ``stages`` list, ``meta`` and the ``thresholds`` used.
+
+    Raises:
+        ValueError: Too little research data before the lockbox.
+    """
+    code = code_version()
+    version, th = thresholds.current()
+    cand_params = _complete(subject.strat, params)
+    prior = ledger.selection_set(subject.scope, subject.interval)
+    cand_key = (subject.strategy, db.dumps(cand_params), *subject.research)
+    counted = any((t["strategy"], t["params"], t["start"], t["end"]) == cand_key for t in prior)
+
+    started = time.perf_counter()
+    out = evaluate(subject, cand_params, th=th, selection=[t["edge_sharpe"] for t in prior],
+                   candidate_counted=counted, portfolio=validated_portfolio(subject.question), seed=seed)
+    ledger.record_trials([
+        {**r, "question": subject.question, "family": subject.family, "strategy": subject.strategy,
+         "symbol": subject.scope, "source": "gauntlet", "data_hash": subject.data_hash} for r in out["records"]
+    ])
+    stages = out["stages"]
+    spent = lockbox.spent(subject.question)
+    if spent:
+        stages[-1].summary = ("Spent: a trial on this question has already looked at data from "
+                              f"{subject.sealed.date()} on, so the lockbox can't give an independent verdict. A "
+                              "forward paper test (M7) has to take its place.")
+    verdict = "rejected" if out["failed_stage"] else "candidate"
+    card_id = uuid.uuid4().hex[:12]
+    card = {
+        "card_id": card_id,
+        "created_at": naive_utc().isoformat(timespec="seconds"),
+        "verdict": verdict,
+        "failed_stage": out["failed_stage"],
+        "meta": {**subject.meta, "question": subject.question, "family": subject.family,
+                 "strategy": subject.strategy, "params": cand_params, "research": out["research"],
+                 "lockbox_from": str(subject.sealed.date()), "lockbox_spent": spent, "grid_size": out["grid_size"],
+                 "n_trials": out["n_trials"], "seed": seed, "data_hash": subject.data_hash, "version": code,
+                 "elapsed_s": round(time.perf_counter() - started, 2), "timings": out["timings"]},
+        "thresholds": {"version": version, **th},
+        "stages": [asdict(s) for s in stages],
+    }
+    card = clean(card)
+    _save_card(card)
+    audit.log("gauntlet.run", target=card_id, actor=actor,
+              details={"question": subject.question, "verdict": verdict, "failed_stage": out["failed_stage"]})
+    return card
 
 
 def run_gauntlet(
@@ -657,7 +669,7 @@ def run_gauntlet(
     seed: int = 7,
     actor: str = "user",
 ) -> dict[str, Any]:
-    """Judge a candidate strategy, record every grid setting as a trial, and save the report card.
+    """Judge a single-instrument strategy (see ``judge_subject``).
 
     Args:
         source: Data source.
@@ -666,69 +678,43 @@ def run_gauntlet(
         strategy: Registry key.
         params: Candidate parameters (defaults filled in).
         costs: Cost preset, dict or ``"auto"``.
-        seed: Seed for the grid fill, permutations and bootstrap, for reproducibility.
-        actor: Who ran it, for the audit log.
+        seed: Random seed.
+        actor: Who ran it.
 
     Returns:
-        The report card: ``card_id``, ``verdict`` (``candidate`` or ``rejected``), ``failed_stage``, the
-        ``stages`` list, ``meta`` and the ``thresholds`` used.
+        The report card.
 
     Raises:
         KeyError: Unknown strategy.
         FileNotFoundError: The series isn't ingested.
         ValueError: Too little research data before the lockbox.
     """
-    version, th = thresholds.current()
-    strat = REGISTRY[strategy]
-    cand_params = {**strat.defaults(), **(params or {})}
-    cand_params = {k: (int(v) if strat.params[k].is_int else float(v)) for k, v in cand_params.items()}
-    bars = runner.load_bars(source, symbol, interval)
-    model = runner.resolve_costs(costs, source)
-    rf = runner.risk_free(source, bars, interval)
-    sealed = lockbox.sealed_from()
-    question = f"{strat.family}:{symbol}:{interval}"
-    research = bars[bars["ts"] < sealed]
-    research_hash = store.data_hash(research)
-    period = (str(research["ts"].iloc[0].date()), str(research["ts"].iloc[-1].date())) if len(research) else ("", "")
-    prior = ledger.selection_set(symbol, interval)
-    cand_key = (strategy, db.dumps(cand_params), *period)
-    counted = any((t["strategy"], t["params"], t["start"], t["end"]) == cand_key for t in prior)
+    subject = BarSubject.load(source, symbol, interval, strategy, lockbox.sealed_from(), costs)
+    return judge_subject(subject, params, seed, actor)
 
-    started = time.perf_counter()
-    out = evaluate(bars, strat, cand_params, model, rf, dpy=days_per_year(source), sealed_from=sealed, th=th,
-                   selection=[t["edge_sharpe"] for t in prior], candidate_counted=counted,
-                   portfolio=validated_portfolio(question), seed=seed)
-    ledger.record_trials([
-        {**r, "question": question, "family": strat.family, "strategy": strategy, "symbol": symbol,
-         "source": "gauntlet", "data_hash": research_hash} for r in out["records"]
-    ])
-    stages = out["stages"]
-    spent = lockbox.spent(question)
-    if spent:
-        stages[-1].summary = ("Spent: a trial on this question has already looked at data from "
-                              f"{sealed.date()} on, so the lockbox can't give an independent verdict. A forward "
-                              "paper test (M7) has to take its place.")
-    verdict = "rejected" if out["failed_stage"] else "candidate"
-    card_id = uuid.uuid4().hex[:12]
-    card = {
-        "card_id": card_id,
-        "created_at": naive_utc().isoformat(timespec="seconds"),
-        "verdict": verdict,
-        "failed_stage": out["failed_stage"],
-        "meta": {"question": question, "family": strat.family, "strategy": strategy, "params": cand_params,
-                 "source": source, "symbol": symbol, "interval": interval, "costs": model.__dict__,
-                 "research": out["research"], "lockbox_from": str(sealed.date()), "lockbox_spent": spent,
-                 "grid_size": out["grid_size"], "n_trials": out["n_trials"], "seed": seed,
-                 "data_hash": research_hash, "version": code_version(),
-                 "elapsed_s": round(time.perf_counter() - started, 2), "timings": out["timings"]},
-        "thresholds": {"version": version, **th},
-        "stages": [asdict(s) for s in stages],
-    }
-    card = clean(card)
-    _save_card(card)
-    audit.log("gauntlet.run", target=card_id, actor=actor,
-              details={"question": question, "verdict": verdict, "failed_stage": out["failed_stage"]})
-    return card
+
+def run_portfolio_gauntlet(
+    universe: str, strategy: str, params: dict[str, float] | None = None, seed: int = 7, actor: str = "user"
+) -> dict[str, Any]:
+    """Judge a portfolio strategy on a universe (see ``judge_subject``).
+
+    Args:
+        universe: Universe name (``portfolio.panel.UNIVERSES``).
+        strategy: Portfolio strategy key.
+        params: Candidate parameters (defaults filled in).
+        seed: Random seed.
+        actor: Who ran it.
+
+    Returns:
+        The report card.
+
+    Raises:
+        KeyError: Unknown universe or strategy.
+        FileNotFoundError: An instrument isn't ingested.
+        ValueError: Too little research data before the lockbox.
+    """
+    subject = PanelSubject.load(universe, strategy, lockbox.sealed_from())
+    return judge_subject(subject, params, seed, actor)
 
 
 def _save_card(card: dict[str, Any]) -> None:
@@ -754,28 +740,7 @@ def _save_card(card: dict[str, Any]) -> None:
         )
 
 
-def clean(obj: Any) -> Any:
-    """Make a value strict-JSON safe: NaN and infinity become None, numpy scalars become Python numbers.
-
-    Browsers reject NaN in JSON, and missing values are common in report cards (no PBO without parameters).
-
-    Args:
-        obj: Nested dicts, lists, tuples and scalars.
-
-    Returns:
-        The same structure with only JSON-native values.
-    """
-    if isinstance(obj, dict):
-        return {str(k): clean(v) for k, v in obj.items()}
-    if isinstance(obj, list | tuple):
-        return [clean(v) for v in obj]
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, float | np.floating):
-        return float(obj) if math.isfinite(obj) else None
-    return obj
+clean = db.json_safe  # kept under its old name: cards and calibration use it
 
 
 def _json_default(obj: Any) -> Any:
@@ -888,18 +853,9 @@ def open_lockbox(card_id: str, confirm: str, reason: str, actor: str = "user") -
     if lockbox.spent(m["question"]):
         raise ValueError("this question's lockbox is already spent; a forward paper test has to take its place")
 
-    strat = REGISTRY[m["strategy"]]
-    bars = runner.load_bars(m["source"], m["symbol"], m["interval"])
-    model = runner.resolve_costs(m["costs"], m["source"])
-    rf = runner.risk_free(m["source"], bars, m["interval"])
-    res = run(bars, strat.positions(bars, m["params"]), model, rf, with_trades=False)
-    sealed = pd.Timestamp(m["lockbox_from"], tz="UTC")
-    lock = (bars["ts"] >= sealed).to_numpy()
-    dpy = days_per_year(m["source"])
-    ts_l = bars["ts"][lock]
-    daily = to_daily(res.returns.to_numpy()[lock], ts_l)
-    bench = to_daily(res.benchmark.to_numpy()[lock], ts_l).to_numpy()
-    rf_d = np.zeros(len(daily)) if rf is None else to_daily(rf.to_numpy()[lock], ts_l).to_numpy()
+    subject = subject_from_meta(m, pd.Timestamp(m["lockbox_from"], tz="UTC"))
+    sealed_part = subject.sealed_returns(m["params"])
+    daily, bench, rf_d, dpy = sealed_part["net"], sealed_part["bench"], sealed_part["rf"], subject.dpy
     e, _ = metrics.edge(daily.to_numpy(), bench, rf_d)
     sr_lock = stats.sharpe(e)
 
@@ -912,8 +868,8 @@ def open_lockbox(card_id: str, confirm: str, reason: str, actor: str = "user") -
     stats_lock = metrics.summary(daily, pd.Series(rf_d, index=daily.index), dpy,
                                  benchmark=pd.Series(bench, index=daily.index))
     ledger.record_trial(question=m["question"], family=m["family"], strategy=m["strategy"], params=m["params"],
-                        symbol=m["symbol"], start=str(ts_l.iloc[0].date()), end=str(ts_l.iloc[-1].date()),
-                        source="lockbox", metrics=stats_lock, data_hash=store.data_hash(bars[lock]))
+                        symbol=m["symbol"], start=sealed_part["start"], end=sealed_part["end"], source="lockbox",
+                        metrics=stats_lock, data_hash=sealed_part["data_hash"])
     lockbox.record_opening(m["family"], m["question"], card_id, reason)
 
     stage = next(s for s in card["stages"] if s["key"] == "lockbox")

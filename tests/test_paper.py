@@ -298,3 +298,51 @@ def test_paper_api(monkeypatch):
     assert client.post(f"/api/paper/entries/{added['entry_id']}/retire", json={"reason": ""}).status_code == 409
     assert client.post(f"/api/paper/entries/{added['entry_id']}/retire",
                        json={"reason": "done"}).json()["status"] == "retired"
+
+
+def fake_ingest(name, symbols=None, log=None, actor="user"):
+    """Stand-in for a network ingest: stores nothing and reports success."""
+    return {"source": name, "status": "ok", "series": [], "errors": []}
+
+
+def test_nightly_runs_in_process_and_reports_stale_data(pair, monkeypatch):
+    """Without a server the job runs here; data that stopped days ago is refused and the job reports failure."""
+    from qlab.data import ingest
+    from qlab.paper import nightly
+
+    monkeypatch.setattr(nightly, "api_up", lambda api: False)
+    monkeypatch.setattr(ingest, "ingest", fake_ingest)
+    res = nightly.nightly(log=lambda msg: None)
+    assert res["mode"] == "local" and {r["status"] for r in res["ingest"]} == {"ok"}
+    assert res["run"][0]["status"] == "refused" and "stale" in res["run"][0]["message"]
+    assert res["score"][0]["status"] == "scored" and res["ok"] is False
+
+
+def test_nightly_uses_the_running_api(pair, monkeypatch):
+    """With a server up the job asks it to ingest, decide and score, so the two never fight over the database."""
+    from qlab.data import ingest
+    from qlab.paper import nightly
+
+    monkeypatch.setattr(nightly, "api_up", lambda api: True)
+    monkeypatch.setattr(ingest, "ingest", fake_ingest)
+    app = create_app()
+    monkeypatch.setattr(nightly.httpx, "Client", lambda base_url, timeout: TestClient(app, base_url=base_url))
+    res = nightly.nightly(log=lambda msg: None, poll=0.01)
+    assert res["mode"] == "api" and len(res["ingest"]) == 3
+    assert res["run"][0]["entry_id"] == pair["entry_id"] and res["score"][0]["status"] == "scored"
+
+
+def test_launchd_job_is_rendered_not_installed(tmp_path):
+    """The plist is written for this checkout at a time after the New York close; the steps install nothing."""
+    import plistlib
+
+    from qlab.paper import nightly
+
+    assert nightly.default_time("America/Bogota") == (19, 0)
+    assert nightly.default_time("America/New_York") == (19, 0)
+    assert nightly.default_time("Europe/Madrid") == (1, 0)
+    path, steps = nightly.render_launchd(tmp_path, 19, 5)
+    job = plistlib.loads(path.read_bytes())
+    assert job["Label"] == nightly.LABEL and job["ProgramArguments"][-3:] == ["qlab", "paper", "nightly"]
+    assert job["StartCalendarInterval"] == {"Hour": 19, "Minute": 5}
+    assert any("launchctl bootstrap" in s for s in steps) and path.parent == tmp_path

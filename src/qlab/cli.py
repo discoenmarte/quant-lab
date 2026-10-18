@@ -42,16 +42,26 @@ def init() -> None:
 def ingest(
     source: str = typer.Option("all", help="binance, yahoo, french, or all"),
     symbols: str = typer.Option("", help="Comma-separated symbols; empty means the default universe"),
+    universe: str = typer.Option("", help="usdt: every Binance USDT pair, delisted ones included (1d bars)"),
 ) -> None:
     """Download free data, store it as Parquet and run the quality checks.
 
     Args:
         source: Which source to ingest.
         symbols: Optional symbol filter.
+        universe: ``usdt`` ingests the whole Binance USDT cross-section instead of the default symbols.
     """
-    from .data.ingest import SOURCES
+    from .data.ingest import SOURCES, ingest_usdt_universe
     from .data.ingest import ingest as run
 
+    if universe:
+        if universe != "usdt" or source != "binance":
+            raise typer.BadParameter("--universe usdt works with --source binance only")
+        res = ingest_usdt_universe(log=typer.echo, actor="cli")
+        m = res["manifest"]
+        typer.echo(f"== binance usdt: {res['status']} ({len(res['series'])} series, {len(res['errors'])} errors; "
+                   f"{len(m['excluded'])} of {m['n_pairs']} pairs left out)")
+        return
     names = list(SOURCES) if source == "all" else [source]
     wanted = [s.strip() for s in symbols.split(",") if s.strip()] or None
     for name in names:

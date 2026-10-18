@@ -1,6 +1,8 @@
 """Ingestion: download a source, store each series, check its quality and update the catalog.
 
 Re-running is safe: archive files are cached, series files are rewritten, and quality issues are replaced.
+``ingest_usdt_universe`` ingests the whole Binance USDT cross-section, delisted pairs included, and writes the
+manifest the crypto universes are built from.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from .. import audit, db
 from ..timeutil import naive_utc
 from . import quality, store
 from .sources import binance, french, yahoo
-from .universe import CRYPTO, ETFS
+from .universe import CRYPTO, ETFS, write_usdt_manifest
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ def ingest(
     symbols: list[str] | None = None,
     log: Callable[[str], None] | None = None,
     actor: str = "user",
+    intervals: list[str] | None = None,
 ) -> dict[str, Any]:
     """Ingest one source.
 
@@ -80,6 +83,7 @@ def ingest(
         symbols: Restrict to these symbols. None ingests the source's default universe.
         log: Receives one progress line per series.
         actor: Who triggered it, for the audit log.
+        intervals: Restrict to these intervals. None ingests the source's default intervals.
 
     Returns:
         ``{"source", "status", "series": [catalog entries with issue counts], "errors": [messages]}``.
@@ -96,7 +100,7 @@ def ingest(
     stored: list[dict[str, Any]] = []
     errors: list[str] = []
     for symbol in symbols or info.symbols:
-        for interval in info.intervals:
+        for interval in intervals or info.intervals:
             try:
                 if source == "binance":
                     df = binance.fetch(symbol, interval)
@@ -134,6 +138,34 @@ def ingest(
     audit.log("data.ingest", target=source, actor=actor,
               details={"status": status, "series": len(stored), "errors": errors[:5]})
     return {"source": source, "status": status, "series": stored, "errors": errors}
+
+
+def ingest_usdt_universe(log: Callable[[str], None] | None = None, actor: str = "user") -> dict[str, Any]:
+    """Ingest daily bars of every USDT pair in the Binance archive, delisted pairs included.
+
+    Lists the archive, leaves out stablecoins, gold tokens, wrapped coins, leveraged tokens and tokenized
+    equities (``binance.exclusion_reason``), writes the manifest that the crypto universes read, then ingests
+    the kept pairs' 1d bars with checksums and quality checks.
+
+    Args:
+        log: Receives progress lines.
+        actor: Who triggered it, for the audit log.
+
+    Returns:
+        The ``ingest`` result plus ``manifest`` (kept and excluded pairs with reasons).
+
+    Raises:
+        SourceError: The archive listing can't be fetched.
+    """
+    say = log or (lambda _msg: None)
+    binance.listed.cache_clear()  # a new run sees files published since the last one
+    manifest = binance.usdt_universe("1d", say)
+    write_usdt_manifest(manifest)
+    audit.log("data.universe", target="binance_usdt", actor=actor,
+              details={"n_pairs": manifest["n_pairs"], "kept": len(manifest["kept"]),
+                       "excluded": len(manifest["excluded"])})
+    res = ingest("binance", manifest["kept"], log=say, actor=actor, intervals=["1d"])
+    return {**res, "manifest": manifest}
 
 
 def list_sources() -> list[dict[str, Any]]:

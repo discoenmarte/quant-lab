@@ -9,6 +9,7 @@ import {
   type GauntletCard,
   type Instrument,
   type LockboxState,
+  type PortfolioUniverse,
   type StrategyDef,
   type ThresholdState,
 } from '../api';
@@ -81,13 +82,20 @@ function funnelOption(rows: FunnelRow[]): EChartsOption {
  * @param props.onCard - Receives the new report card.
  */
 function RunForm({ onCard }: { onCard: (c: GauntletCard) => void }) {
-  const strategies = useApi<StrategyDef[]>('/backtest/strategies');
+  const [kind, setKind] = useState<'bars' | 'portfolio'>('bars');
+  const strategies = useApi<StrategyDef[]>(kind === 'portfolio' ? '/portfolio/strategies' : '/backtest/strategies');
+  const universes = useApi<PortfolioUniverse[]>('/portfolio/universes');
+  const [universe, setUniverse] = useState('multi_asset');
   const instruments = useApi<Instrument[]>('/backtest/instruments');
   const presets = useApi<Record<string, CostBps>>('/backtest/presets');
   const lock = useApi<LockboxState>('/gauntlet/lockbox');
   const notify = useToast();
   const [inst, setInst] = useState('');
   const [stratName, setStratName] = useState('trend_sma');
+
+  useEffect(() => {
+    setStratName(kind === 'portfolio' ? 'tsmom' : 'trend_sma');
+  }, [kind]);
   const [params, setParams] = useState<Record<string, number>>({});
   const [costs, setCosts] = useState('auto');
   const [running, setRunning] = useState(false);
@@ -105,14 +113,17 @@ function RunForm({ onCard }: { onCard: (c: GauntletCard) => void }) {
   }, [strat]);
 
   const [, symbol, interval] = inst.split('|');
-  const question = strat ? `${strat.family}:${symbol}:${interval}` : '';
+  const question = !strat ? '' : kind === 'portfolio' ? `${strat.family}:${universe}:1d` : `${strat.family}:${symbol}:${interval}`;
   const spent = lock.data?.spent.some((s) => s.question === question);
 
   async function runIt() {
     const [source, sym, intv] = inst.split('|');
     setRunning(true);
     try {
-      const card = await post<GauntletCard>('/gauntlet/run', { source, symbol: sym, interval: intv, strategy: stratName, params, costs });
+      const body = kind === 'portfolio'
+        ? { kind, universe, strategy: stratName, params }
+        : { kind, source, symbol: sym, interval: intv, strategy: stratName, params, costs };
+      const card = await post<GauntletCard>('/gauntlet/run', body);
       notify(`${card.meta.question}: ${card.verdict}${card.failed_stage ? ` at ${card.failed_stage}` : ''}.`, card.verdict === 'rejected' ? 'warn' : 'ok');
       onCard(card);
       await lock.reload();
@@ -126,16 +137,33 @@ function RunForm({ onCard }: { onCard: (c: GauntletCard) => void }) {
   return (
     <Card title="Judge a candidate">
       <div className="form-grid">
-        <label className="field">
-          Instrument
-          <select value={inst} onChange={(e) => setInst(e.target.value)}>
-            {(instruments.data ?? []).map((i) => (
-              <option key={`${i.source}|${i.symbol}|${i.interval}`} value={`${i.source}|${i.symbol}|${i.interval}`}>
-                {i.symbol} · {i.interval} ({i.source})
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="tabs">
+          <button className={`tab ${kind === 'bars' ? 'active' : ''}`} onClick={() => setKind('bars')}>Single instrument</button>
+          <button className={`tab ${kind === 'portfolio' ? 'active' : ''}`} onClick={() => setKind('portfolio')}>Portfolio</button>
+        </div>
+        {kind === 'bars' ? (
+          <label className="field">
+            Instrument
+            <select value={inst} onChange={(e) => setInst(e.target.value)}>
+              {(instruments.data ?? []).map((i) => (
+                <option key={`${i.source}|${i.symbol}|${i.interval}`} value={`${i.source}|${i.symbol}|${i.interval}`}>
+                  {i.symbol} · {i.interval} ({i.source})
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <label className="field">
+            Universe
+            <select value={universe} onChange={(e) => setUniverse(e.target.value)}>
+              {(universes.data ?? []).map((u) => (
+                <option key={u.name} value={u.name} disabled={!u.first}>
+                  {u.name} ({u.members.length}{u.first ? `, from ${u.first.slice(0, 4)}` : ''})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="field">
           Strategy
           <select value={stratName} onChange={(e) => setStratName(e.target.value)}>
@@ -152,14 +180,16 @@ function RunForm({ onCard }: { onCard: (c: GauntletCard) => void }) {
                 onChange={(e) => setParams({ ...params, [k]: Number(e.target.value) })} />
             </label>
           ))}
-        <label className="field">
-          Costs
-          <select value={costs} onChange={(e) => setCosts(e.target.value)}>
-            <option value="auto">auto (by asset class)</option>
-            {Object.keys(presets.data ?? {}).map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label>
-        <button className="btn primary" onClick={runIt} disabled={running || !inst}>
+        {kind === 'bars' && (
+          <label className="field">
+            Costs
+            <select value={costs} onChange={(e) => setCosts(e.target.value)}>
+              <option value="auto">auto (by asset class)</option>
+              {Object.keys(presets.data ?? {}).map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+        )}
+        <button className="btn primary" onClick={runIt} disabled={running || (kind === 'bars' && !inst)}>
           <Icon name="shield" /> {running ? 'Judging… (a few seconds)' : 'Run the gauntlet'}
         </button>
         <p className="faint small">

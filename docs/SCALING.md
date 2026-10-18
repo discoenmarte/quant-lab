@@ -12,6 +12,7 @@ this lab, so you can decide where your time and money go.*
 | What works | Data lake (21 ETFs, BTC/ETH, factors), single-asset and portfolio engines with costs, a ten-stage gauntlet, calibration on synthetic markets, a ledger of 1.6M trials (almost all from calibration), a web console |
 | How honest the gauntlet is | Lets noise through **1.0-1.4%** of the time in two independent studies (no family above 3%); catches an edge Sharpe of **1.0 95%** of the time and **0.5 about half** the time with 20 years of daily data |
 | What it found on real data | **Nothing passed.** Ten pre-registered portfolio candidates (five published rules on two universes) all rejected. Best near-miss: the ten-month trend filter, edge Sharpe 0.34, permutation p ≈ 0.05, false-discovery chance ~55%, losing ~6% in 2008 against ~36-42% for equal weight |
+| Crypto cross-section (M3c) | Built: 588 Binance pairs incl. delisted, point-in-time top 30/100, calibrated (noise 0.16%). **Eight pre-registered factor candidates, all rejected**; near-miss: low volatility on the top 30 (edge 0.43, permutation p 0.012, but needs ~12 years at that Sharpe). Long-only crypto fell ~95% from the 2021 peak |
 
 The second-to-last line is the important one. The lab didn't fail; it measured something true. **A realistic
 edge (Sharpe 0.2-0.4 beyond buy-and-hold) on ~20 years of daily data can't be told apart from luck**, by any
@@ -71,7 +72,7 @@ Costs that eat returns, in order of size:
 
 | Step | What | Monthly cost | Gate to move on |
 |---|---|---|---|
-| Now | M3c crypto cross-section on free data; calibrate dynamic universes | $0 | A candidate passes the gauntlet, or the study says crypto factors don't survive costs either |
+| Done | M3c crypto cross-section on free data; calibrated dynamic universes | $0 | Result: the published crypto factors' long legs don't pass after costs on the liquid top 30/100 (2019-2024); one near-miss |
 | Next | M7a forward paper book: each night record target weights before the next bar exists, score later. Every candidate and near-miss goes in | $0 (Mac + launchd) or $5/month VPS for reliability | Runs unattended for 30 days |
 | Then | M6 registry and alerts, M7b broker paper trading (Alpaca paper, Binance testnet: free) | $5-20 | 3-6 months of forward results inside the backtest's band |
 | Optional | Stock data for factor breadth | +$35-55 | The capital or career case above |

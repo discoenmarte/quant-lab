@@ -176,6 +176,53 @@ Study E: report `d4239d73`, seeds 170,001+, thresholds v2, 800 runs, 183,200 tri
 
 So a rejected size candidate is weak evidence against a size premium. A rejected momentum candidate says more.
 
+## First real verdicts (pre-registered batch `23275b56`, 2026-10-18)
+
+The batch ran after the pre-registration was committed (`ed1d334`), on research data only (2019-02-14 to
+2024-09-30). **All eight were rejected.** Every lockbox is still sealed.
+
+| Candidate | Edge after costs (before) | Permutation p | PSR, N = 1 | Verdict |
+|---|---|---|---|---|
+| momentum, top 30 | +0.64 (+0.82) | 0.054 | 0.93 | rejected at walk-forward (out-of-sample −0.07); also plateau, permutation, significance |
+| reversal, top 30 | −4.00 (−1.47) | 1.000 | 0.00 | rejected at costs; fails everything |
+| low volatility, top 30 | +0.43 (+0.72) | **0.012** | 0.84 | rejected at significance only (minimum track record 12.3 years) |
+| size, top 30 | −0.87 (−0.61) | 0.934 | 0.02 | rejected at costs |
+| momentum, top 100 | +0.23 (+0.48) | 0.168 | 0.71 | rejected at walk-forward (out-of-sample −0.14) |
+| reversal, top 100 | −4.76 (−1.04) | 1.000 | 0.00 | rejected at costs |
+| low volatility, top 100 | +0.02 (+0.52) | 0.052 | 0.52 | rejected at plateau |
+| size, top 100 | −0.32 (+0.05) | 0.433 | 0.23 | rejected at costs |
+
+What the batch says:
+
+- **Reversal is wrong-signed in a liquid universe, even before costs.** Yesterday's losers among the top 30 or 100
+  kept losing. That matches Zaremba et al.'s finding of daily momentum among the largest coins. Daily turnover at
+  20 bps then makes it ruinous.
+- **The size premium didn't show up.** The least-traded members did worse than equal weight among the top 30 and
+  about the same among the top 100. Calibration said a size rejection is weak evidence (power 5-10%), but here the
+  edge itself is negative, which is more than a lack of power.
+- **Momentum earned an edge on the top 30 (+0.64 after costs), but not robustly.**
+  - Choosing parameters on the past did worse than nothing in the following year.
+  - Only 7 of 35 neighbouring settings kept half the edge.
+  - It is weaker on the top 100.
+- **Low volatility on the top 30 is the near-miss.** It passed costs, walk-forward (+1.45 out of sample), the
+  plateau, the permutation test (p = 0.012) and regimes. It failed significance: even undeflated, the chance its
+  edge is above zero is 0.84, and the minimum track record at its Sharpe is 12.3 years against 5.6 available.
+  This runs against the published expectation (no low-volatility premium). It is a candidate for the forward
+  paper book, not for money.
+- **Every long-only crypto portfolio fell about 95% from the 2021 peak.** The bootstrap stage sizes each at 9-11%
+  of capital to keep its 95th-percentile drawdown within 25%.
+
+**Disclosure about the Deflated Sharpe.** Every card shows DSR 0.000 with a luck threshold of edge Sharpe 2.25
+(top 30) and 2.51 (top 100). The threshold comes from the spread of the batch's trial Sharpes, and the
+reversal candidates' cost-driven −4.0 and −4.8 inflate that spread far beyond what luck produces.
+
+The verdicts don't depend on it. Without any deflation (N = 1, the PSR column), no candidate reaches 0.95. Every
+candidate except low volatility on the top 30 also fails another stage.
+
+Estimating the cross-trial variance robustly is a method change for later batches. Two options: leave out trials
+whose edge is negative before costs, or use a spread that ignores outliers. Either should be decided on
+calibration evidence.
+
 ## Open question for the owner
 
 The costs stage (net CAGR > 0) and the regimes stage judge absolute returns, while every other stage judges the

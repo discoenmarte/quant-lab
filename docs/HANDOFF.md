@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-18, after M3, M3b and M7a
+- **Last updated:** 2026-10-18, after M3, M3b, M7a and M3c
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -45,9 +45,14 @@ src/qlab/audit.py         log / recent
 src/qlab/timeutil.py      UTC helpers and clocks
 src/qlab/glossary.py      plain-language definitions used by UI tooltips
 src/qlab/backtest/metrics.py   Sharpe, Sortino, CAGR, drawdowns, Calmar, exposure, turnover, edge (appraisal ratio)
-src/qlab/portfolio/       panel (aligned universes), engine (weights), strategies, leakage, runner, synthetic
+src/qlab/data/            sources (binance: archive listing, MD5-checked downloads, the USDT universe filter;
+                          yahoo; french), ingest (incl. ingest_usdt_universe), store, quality, universe (manifest)
+src/qlab/portfolio/       panel (static universes; dynamic ones with an availability mask and point-in-time
+                          membership), engine (constant fractions, or drifting positions on dynamic panels),
+                          strategies (incl. the cross-sectional crypto rules xs_*), leakage, runner, synthetic
 src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, bootstrap), thresholds,
-                          subjects (bars or panel), pipeline (ten stages, cards, lockbox), calibration
+                          subjects (bars or panel; day shuffles and the cross-sectional null for dynamic panels),
+                          pipeline (ten stages, cards, lockbox), calibration (incl. synthetic crypto cross-sections)
 src/qlab/paper/           forward paper book: sessions (bar open/close times), book (add, decide, retire), score
                           (replay through the engines), monitor (bands, CUSUM alarm), nightly (job, launchd)
 src/qlab/api/main.py      FastAPI app; serves web/dist at /
@@ -62,7 +67,8 @@ web/src/pages/            Home, DataHealth, BacktestStudio, PortfolioLab, Gauntl
 web/src/components/       Card, Stat, Badge, InfoTip, DataTable, EChart, Icon, Clocks, Toast, CommandPalette
 .github/workflows/ci.yml  ruff + pytest, and web type-check + build, on every push
 docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack, 0004 gauntlet,
-                          0005 portfolios and forward evidence first, 0007 forward paper book
+                          0005 portfolios and forward evidence first, 0006 crypto cross-section, 0007 paper book
+docs/preregistration/     batches written down and committed before they run
 ops/launchd/              template for the nightly paper job (rendered by `make paper-launchd`, never installed)
 ```
 
@@ -77,7 +83,7 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M2 | Backtest engine | **Done** (tag `m2`). 6 strategies, next-open engine with costs and cash, look-ahead check, Studio. |
 | M3 | Validation gauntlet | **Done** (tag `m3`). Ten stages on edge returns, fixed lockbox, calibrated in three studies. |
 | M3b | Portfolio lab | **Done** (tag `m3b`). Engine, six strategies, portfolio gauntlet and calibration, Portfolio Lab page. |
-| M3c | Breadth: crypto cross-section | **Next** (docs/SCALING.md). Spec below. |
+| M3c | Breadth: crypto cross-section | **Done** (tag `m3c`). 588 Binance USDT pairs incl. delisted, point-in-time universes, drifting positions, four crypto factor rules, cross-sectional null, study E, eight pre-registered verdicts (all rejected). |
 | M7a | Forward paper book | **Done** (tag `m7a`). Decisions before outcomes, engine-exact scoring, frozen bands, CUSUM alarm, nightly job, Trading Desk. |
 | M6, M7b, M4, M5 | Registry, broker paper trading, inbox, mining | In that order (decision 0005). |
 | M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
@@ -142,24 +148,84 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
   `sectors`, `crypto` and `etfs_and_crypto` before being recorded; they were then recorded with the lockbox
   included, so those 24 questions are spent (audit event `lockbox.disclosure`).
 
-### M3c: breadth, a survivorship-free crypto cross-section (next; see docs/SCALING.md)
+### M3c: breadth, a survivorship-free crypto cross-section (done; decision 0006)
 
-Why: on ~20 years of daily ETF data no realistic edge can be told from luck (all ten pre-registered portfolio
-candidates were rejected; the best near-miss needs ~23 years of data at its Sharpe). Power grows with independent
-bets. The Binance archive is free and keeps delisted pairs (checked 2026-10-18: ANCUSDT has files through its
-December 2022 delisting, BTTUSDT through January 2022), so a survivorship-free cross-section costs nothing.
+**Data.** `qlab ingest --source binance --universe usdt`:
 
-1. **Ingest:** list `data/spot/monthly/klines/` on the archive's S3 endpoint (paginated, 1,000 prefixes a page),
-   keep USDT pairs, drop stablecoins and leveraged tokens (`UP`, `DOWN`, `BULL`, `BEAR`), download 1d monthly
-   files with checksums, a few threads at a time. Expect a few hundred pairs and ~20,000 small files.
-2. **Dynamic panels:** an availability mask (T × N) instead of "start when everyone exists"; prices NaN when an
-   instrument doesn't trade. Point-in-time membership: top N by trailing 30-day dollar volume, computed from data
-   up to each date only. A delisted position exits at its last close (optimistic; note it).
-3. **Engine and strategies:** weights forced to zero outside membership; cross-sectional momentum, short-term
-   reversal, low volatility, size; long-only (spot) first, long-short as research only.
-4. **Gauntlet and calibration:** permutations shuffle whole days with the mask kept in place; calibrate on
-   synthetic panels with listings and delistings.
-5. **Pre-register** the first batch (published crypto factors at their published parameters) before any run.
+- Lists the archive's S3 bucket (1,000 entries a page) and keeps the USDT pairs.
+- Leaves out stablecoins and fiat, gold tokens, wrapped or staked copies, leveraged tokens and tokenized equities,
+  with a reason for each in `curated/binance/usdt_universe.json`.
+  - Leveraged tokens are recognised by their listed underlying, so `JUP` and `SYRUP` stay in.
+  - Tokenized equities are `…B` pairs first listed from 2026-06.
+- Downloads 1d monthly files plus the current and previous month's daily files, each checked against the listed
+  MD5, over one keep-alive pool.
+
+On 2026-10-18 the archive had 757 USDT pairs: 588 kept, 169 left out, zero ingest errors. Klines now keep
+`quote_volume` (dollar volume).
+
+**Panels.** `crypto_top30` and `crypto_top100`:
+
+- Each day's universe is the top N by the past 30 days' average dollar volume, from data up to that day, with bars
+  on all 30 days.
+- An availability mask and NaN prices where a pair doesn't trade.
+- Series are split at gaps and at one-day rises above 20× (token swaps after halts: COCOS, DREP, the new LUNA).
+- Both start on 2019-02-14, the first day with 20 members, which leaves 5.6 research years.
+- Pairs that are ever members: 374 (top 30) and 565 (top 100).
+
+**Engine.**
+
+- Dynamic panels hold drifting positions and trade only when targets change; membership is enforced then.
+- A pair with no bar the next day is sold at its last close (optimistic).
+- Costs are `crypto_xs`, 20 bps a side.
+- The benchmark is equal weight of the members, rebalanced weekly.
+- Static ETF panels keep the M3b engine.
+
+**Rules.** The long legs of published crypto factors, `kind="dynamic"`:
+
+- `xs_weekly_momentum`: LTW 2022, three weeks.
+- `xs_reversal`: Zaremba et al. 2021, prior day.
+- `xs_low_vol`: RETVOL, one week.
+- `xs_small_size`: PRCVOL, one week of dollar volume.
+
+Each holds the best or worst quintile of members in equal weights. The runner refuses rules on the wrong kind of
+universe.
+
+**Gauntlet.**
+
+- **Look-ahead on dynamic panels** also changes future volume and delists coins after the cut, then recomputes
+  membership. Cheats that read tomorrow's membership, volume or delistings are caught.
+- **Permutation null:** each day's moves, as simple returns per unit of local volatility, are dealt out again
+  among the previous close's members (and separately among the other pairs).
+  - A day shuffle can't see a size premium (0% power).
+  - Dealing log returns let low-volatility noise pass 40% of the time.
+- **Calibration study E** (`qlab calibrate --xs-reps 40`, report `d4239d73`, seeds 170,001+, 800 runs, 105 min):
+  - noise passes 0.16% (worst family 2.5%)
+  - momentum: an edge of 1.0 is caught 85% of the time and 0.5 40% (5.6 years)
+  - size: an edge of 1.0 is caught 5-10%, because the gates on absolute returns and the statistical stages block it
+- Thresholds stay v2.
+
+**First real verdicts** (pre-registered in `docs/preregistration/2026-10-18-m3c-crypto-factors.md`, commit
+`ed1d334`, batch `23275b56`): **all eight rejected.**
+
+- Reversal: wrong-signed even before costs.
+- Size: negative edge.
+- Momentum on the top 30: edge +0.64 after costs, but negative after walk-forward re-optimisation and fragile
+  among its neighbours.
+- **Near-miss: low volatility on the top 30.**
+  - Edge +0.43; passed costs, walk-forward (+1.45 out of sample), plateau, permutation (p = 0.012) and regimes.
+  - Failed significance: PSR 0.84 even undeflated; minimum track record 12.3 years.
+- Every long-only crypto portfolio fell about 95% from the 2021 peak.
+- Lockboxes are still sealed.
+- **Disclosure:** the batch's Deflated Sharpe threshold was inflated by the reversal candidates' −4 edges (DSR 0.000
+  on every card). No verdict depends on it (decision 0006).
+
+**Follow-ups worth doing:**
+
+1. Estimate the Deflated Sharpe's cross-trial variance robustly, decided on calibration evidence.
+2. Decide whether the absolute-return gates (net CAGR > 0, regimes) fit long-only crypto (decision 0006, open
+   question).
+3. Put the low-volatility near-miss in the forward paper book. Crypto decisions are late with the daily archive
+   (gotchas), so a live price feed comes first.
 
 ### M7a: forward paper book (done; decision 0007)
 
@@ -269,6 +335,15 @@ holds at mining scale.
 - The lockbox and the paper book's forward days overlap (decision 0007 §6). Before a card in the book opens its
   lockbox, cap the lockbox window at the entry's first decision.
 - Crypto daily decisions are always late with the public archive (it publishes after the next candle opens).
+- Crypto cross-section:
+  - **Timings:** the full ingest (`qlab ingest --source binance --universe usdt`, about 33,000 files) takes about
+    20 minutes on an empty cache and a minute or two when cached. Re-run it to pick up new listings and months.
+  - **Tokenized equities:** the rule "ends in B, first file from 2026-06 on" will also catch any genuine coin named
+    that way listed later; read the manifest's exclusions after each ingest.
+  - **Speed:** a gauntlet run on `crypto_top100` takes a couple of minutes (565 columns, drifting-position loop),
+    and calibration study E took 105 minutes for 800 runs.
+  - **Rules by kind:** cross-sectional rules (`kind="dynamic"`) are refused on static ETF universes and static
+    rules on the crypto universes (`runner.check_fit`).
 
 ## 8. References
 

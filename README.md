@@ -9,6 +9,8 @@ backtest is recorded in a trial ledger, so the statistics stay honest about how 
 
 **Calibrated:** with 20 years of daily data the gauntlet catches an edge Sharpe of 1.0 95% of the time and 0.5
 about half the time, and lets noise through 1.4% of the time ([decision 0004](docs/decisions/0004-gauntlet-design.md)).
+On synthetic crypto cross-sections of 5.6 years it lets noise through 0.16% of the time and catches a momentum edge
+of 1.0 85% of the time ([decision 0006](docs/decisions/0006-crypto-cross-section.md)).
 
 > Research and paper trading only. Nothing in this repository places real-money orders.
 
@@ -33,7 +35,7 @@ layer has a narrow contract, data flows one way, and the scale-up path is writte
 ```mermaid
 flowchart LR
   subgraph Sources
-    S1[Binance public data]
+    S1[Binance public archive<br/>588 USDT pairs]
     S2[Stooq / Yahoo ETFs]
     S3[Ken French factors]
     S4[arXiv q-fin]
@@ -63,9 +65,9 @@ flowchart LR
 
 | Layer | Package | Contract |
 |---|---|---|
-| Data | `qlab.data` | Each series is a Parquet file `curated/<source>/<symbol>/<interval>.parquet` with columns `ts` (UTC), `open, high, low, close, volume` (+ `adj_close` when the source has it). Ingestion is idempotent and verifies checksums when the source publishes them. Quality issues go to the `quality_issues` table. |
+| Data | `qlab.data` | Each series is a Parquet file `curated/<source>/<symbol>/<interval>.parquet` with columns `ts` (UTC), `open, high, low, close, volume` (+ `adj_close` or `quote_volume` when the source has it). Ingestion is idempotent and verifies checksums when the source publishes them. Quality issues go to the `quality_issues` table. The crypto cross-section's manifest records which Binance pairs were kept and why the others weren't. |
 | Backtest | `qlab.backtest` | A strategy is a pure function `positions = f(bars, **params)` that may only use data up to each bar. The engine applies positions from the next bar, charges costs on every change, and returns daily returns, positions and trades. |
-| Portfolio | `qlab.portfolio` | A panel aligns several instruments on the dates they share. A portfolio strategy is a pure function `weights = f(panel, **params)`; the engine fills at the next open with per-instrument costs and judges against equal weight through the same engine. |
+| Portfolio | `qlab.portfolio` | A panel aligns several instruments on one calendar: static panels on the dates every member shares, dynamic panels (the crypto cross-section) with an availability mask and point-in-time membership. A portfolio strategy is a pure function `weights = f(panel, **params)`; the engine fills at the next open with per-instrument costs (drifting positions on dynamic panels) and judges against equal weight through the same engine. |
 | Gauntlet | `qlab.gauntlet` | Judges a *subject* (a single-instrument rule or a portfolio rule) over its family's parameter grid, on research data before the fixed lockbox date, on the edge beyond buy-and-hold. Returns a report card: ten stages with value, threshold, pass/fail and chart data. Thresholds are versioned and calibrated on synthetic markets. |
 | Ledger | `qlab.ledger`, `qlab.audit` | Append-only. Every backtest is a trial on a research question; every action is an audit event. |
 | Inbox | `qlab.inbox` | Papers become structured `StrategySpec` records through an LLM provider interface (local Ollama by default). |
@@ -104,7 +106,7 @@ flowchart LR
 | M2 | Backtest engine | Strategy library, cost model, metrics, Backtest Studio | done |
 | M3 | Validation gauntlet | 10 stages on edge returns, fixed lockbox, calibration (three studies), Gauntlet Console, Ledger page | done |
 | M3b | Portfolio lab | Multi-asset panels, weights engine, six diversified strategies, portfolio gauntlet and calibration, pre-registered batches | done |
-| M3c | Breadth | Survivorship-free crypto cross-section from the free Binance archive ([docs/SCALING.md](docs/SCALING.md)) | next |
+| M3c | Breadth | Survivorship-free crypto cross-section (588 Binance USDT pairs, delisted ones included), point-in-time universes, drifting positions, four published crypto factor rules, a cross-sectional null, calibration study E and pre-registered verdicts ([decision 0006](docs/decisions/0006-crypto-cross-section.md)) | done |
 | M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
 | M6 | Registry and alerts | Strategy board, portfolio, alert rules | planned |
@@ -137,5 +139,5 @@ data/              local data lake and database (not committed)
 4. [Gauntlet design: edge returns, a fixed lockbox, honest N, thresholds from calibration](docs/decisions/0004-gauntlet-design.md)
 5. [Portfolios and forward evidence before the paper inbox and mining](docs/decisions/0005-portfolios-and-forward-evidence-first.md)
 
-<!-- 0006 belongs to M3c. -->
+6. [A survivorship-free crypto cross-section: dynamic panels, drifting positions and a cross-sectional null](docs/decisions/0006-crypto-cross-section.md)
 7. [The forward paper book: decisions before outcomes, frozen expectations, honest power](docs/decisions/0007-forward-paper-book.md)

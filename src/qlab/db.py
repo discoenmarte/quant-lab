@@ -138,6 +138,14 @@ SCHEMA = [
         summary VARCHAR,
         trial_id VARCHAR
     )""",
+    # M6: the owner's registry actions (append-only). Lifecycle states are derived, not stored (see registry.py).
+    """CREATE TABLE IF NOT EXISTS registry_events (
+        card_id VARCHAR,
+        ts TIMESTAMP,
+        action VARCHAR,
+        reason VARCHAR,
+        actor VARCHAR
+    )""",
 ]
 
 

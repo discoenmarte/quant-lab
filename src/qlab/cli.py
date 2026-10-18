@@ -384,5 +384,49 @@ def paper_retire(entry_id: str, reason: str = typer.Option(..., help="Why the en
     typer.echo(f"{entry_id}: retired at {e['retired_at']}")
 
 
+@paper_app.command("nightly")
+def paper_nightly(api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API to use when it is up")) -> None:
+    """Ingest the free sources, decide every active entry, and score the book. Exits 1 if a step failed.
+
+    Uses the running Lab API when it answers (it holds the database), otherwise runs everything here.
+
+    Args:
+        api: Base URL of the Lab API.
+    """
+    from .paper.nightly import nightly
+    from .timeutil import now_utc
+
+    typer.echo(f"== {now_utc().isoformat(timespec='seconds')}")
+    res = nightly(api, log=typer.echo)
+    for r in res["ingest"]:
+        typer.echo(f"  ingest {r['source']:<8} {r['status']} ({r['n_series']} series)")
+    for r in res["run"]:
+        typer.echo(f"  run    [{r['status']:<8}] {r['question']:<34} {r['message']}")
+    for r in res["score"]:
+        typer.echo(f"  score  [{'ALARM' if r.get('alarm') else r['status']:<8}] {r['question']:<34} {r['message']}")
+    if not res["ok"]:
+        raise typer.Exit(1)
+
+
+@paper_app.command("launchd")
+def paper_launchd(
+    hour: int = typer.Option(-1, help="Local hour to run at; -1 picks a time after the New York close all year"),
+    minute: int = typer.Option(0, help="Local minute"),
+) -> None:
+    """Write the nightly job as a launchd plist for this checkout and print how to install it. Installs nothing.
+
+    Args:
+        hour: Local hour, or -1 for the default.
+        minute: Local minute (used with an explicit hour).
+    """
+    from .paper.nightly import default_time, render_launchd
+
+    if hour < 0:
+        hour, minute = default_time()
+    path, steps = render_launchd(config.data_dir() / "ops", hour, minute)
+    typer.echo(f"Wrote {path} (runs daily at {hour:02d}:{minute:02d} local time). To install it yourself:\n")
+    typer.echo("\n".join(steps))
+
+
 if __name__ == "__main__":
     app()

@@ -58,7 +58,7 @@ def load_bars(
     if start:
         bars = bars[bars["ts"] >= pd.Timestamp(start, tz="UTC")]
     if end:
-        bars = bars[bars["ts"] <= pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)]
+        bars = bars[bars["ts"] < pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)]  # through 23:59 that day
     return bars.reset_index(drop=True)
 
 

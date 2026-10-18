@@ -237,8 +237,12 @@ def run_calibration(
     workers: int | None = None,
     log: Callable[[str], None] = print,
     actor: str = "user",
+    base_seed: int = 1_000,
 ) -> dict[str, Any]:
     """Run the calibration study and save its report.
+
+    Thresholds tuned on one study should be confirmed on another with a different ``base_seed``; otherwise they
+    are fitted to the same simulated markets they are judged on.
 
     Args:
         noise_reps: Runs per family and researcher type on noise markets.
@@ -249,6 +253,7 @@ def run_calibration(
         workers: Worker processes; None uses all cores but one.
         log: Progress callback.
         actor: Who ran it, for the audit log.
+        base_seed: First market seed; run ``i`` uses ``base_seed + i + 1``.
 
     Returns:
         The report: ``id``, ``created_at``, ``thresholds_version``, ``settings``, ``noise``, ``power``,
@@ -270,7 +275,7 @@ def run_calibration(
     log(f"planted trend sizes {sizes}; true edges {({f'{k[0]}@{k[1]}': round(v, 2) for k, v in truth.items()})}")
 
     tasks = []
-    seed = 1_000
+    seed = base_seed
     for family in NOISE_FAMILIES:
         for scenario in ("noise_fixed", "noise_tuned"):
             for _ in range(noise_reps):
@@ -311,7 +316,7 @@ def run_calibration(
         "settings": {"noise_reps": noise_reps, "power_reps": power_reps, "years": list(years),
                      "noise_years": noise_years, "edges": list(edges), "trend_sizes": {str(k): v for k, v in
                                                                                       sizes.items()},
-                     "n_runs": len(runs), "n_trials": len(trials)},
+                     "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed},
         **summarise(runs, th),
         "runs": [{k: r[k] for k in ("scenario", "family", "years", "trend", "seed", "values", "admitted",
                                     "failed_stage")} for r in runs],

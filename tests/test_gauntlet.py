@@ -130,8 +130,9 @@ def test_judge_uses_thresholds_only():
          "div_gain": float("nan")}
     verdict = pipeline.judge(v, th)
     assert all(x is not False for x in verdict.values())
-    assert pipeline.judge({**v, "perm_p": 0.02}, th)["permutation"] is False
+    assert pipeline.judge({**v, "perm_p": 0.02}, {**th, "perm_max_p": 0.01})["permutation"] is False
     assert pipeline.judge({**v, "perm_p": 0.02}, {**th, "perm_max_p": 0.05})["permutation"] is True
+    assert pipeline.judge({**v, "pbo": 0.6}, {**th, "pbo_max": 1.0})["significance"] is True
 
 
 def test_thresholds_are_versioned_and_need_a_reason():
@@ -143,8 +144,8 @@ def test_thresholds_are_versioned_and_need_a_reason():
         thresholds.update({"nope": 1}, "typo")
     with pytest.raises(ValueError):
         thresholds.update({"lockbox_from": "next year"}, "bad date")
-    assert thresholds.update({"perm_max_p": 0.05}, "calibration") == v1 + 1
-    assert thresholds.current()[1]["perm_max_p"] == 0.05
+    assert thresholds.update({"perm_max_p": 0.02}, "calibration") == v1 + 1
+    assert thresholds.current()[1]["perm_max_p"] == 0.02
 
 
 def test_studio_runs_stop_before_the_lockbox_unless_asked():

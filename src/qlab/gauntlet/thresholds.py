@@ -2,6 +2,13 @@
 
 Thresholds are fixed *before* testing. Changing them creates a new version with a written reason, every report
 card records the version it was judged against, and earlier cards are never re-judged.
+
+The defaults come from calibration on synthetic markets, never from real strategies (decision 0004). Starting
+from the roadmap's values, 1,000 noise runs passed 0% of the time, but a true edge Sharpe of 0.5 was caught only
+2% of the time with 20 years of data. Re-judging the same runs showed three gates costing power without
+buying protection: PBO (a coin flip on a plateau, even for a real edge), the walk-forward ratio, and a
+permutation level of 0.01 on top of the Deflated Sharpe. Without them, noise passes 2.0% of the time and the
+same edge is caught 68% of the time, close to the ~73% ceiling of a single one-sided 5% test.
 """
 
 from __future__ import annotations
@@ -18,15 +25,15 @@ DEFAULT: dict[str, Any] = {
     "lockbox_from": DEFAULT_FROM,  # first sealed date for the whole lab (ISO date)
     "min_net_sharpe": 0.0,         # costs: annual edge Sharpe after costs must exceed this
     "wf_min_oos_sharpe": 0.0,      # walk-forward: out-of-sample edge Sharpe must exceed this
-    "wf_min_ratio": 0.5,           # walk-forward: out-of-sample at least this share of in-sample
+    "wf_min_ratio": 0.0,           # walk-forward: out-of-sample at least this share of in-sample (0 = off)
     "plateau_min": 0.6,            # plateau: share of neighbouring settings that also work
-    "perm_max_p": 0.01,            # permutation: p-value must be at most this
+    "perm_max_p": 0.05,            # permutation: p-value must be at most this (one pre-specified rule)
     "n_perm": 500,                 # permutation: number of shuffled histories
     "n_boot": 1000,                # bootstrap: number of resampled paths
     "boot_block": 20,              # bootstrap: mean block length in days
     "dd_budget": 0.25,             # bootstrap: drawdown the recommended size keeps the 95th percentile within
     "dsr_min": 0.95,               # significance: Deflated Sharpe probability must reach this
-    "pbo_max": 0.2,                # significance: probability of backtest overfitting must stay at or below this
+    "pbo_max": 1.0,                # significance: PBO at or below this (1 = reported, not gated)
     "fdr_prior": 0.05,             # significance: prior share of tested ideas that are real (for the FDR)
     "fdr_sr1": 0.5,                # significance: annual edge Sharpe of a real idea (for the FDR)
     "regime_min_share": 0.6,       # regimes: share of regimes with a positive net return

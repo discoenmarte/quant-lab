@@ -445,7 +445,8 @@ def evaluate(
     values.update(wf_oos=oos_sr, wf_ratio=ratio)
     stages.append(Stage(
         "walk_forward", "Walk-forward", None, oos_sr,
-        f"OOS edge Sharpe > {th['wf_min_oos_sharpe']} and >= {th['wf_min_ratio']:.0%} of in-sample",
+        f"OOS edge Sharpe > {th['wf_min_oos_sharpe']}"
+        + (f" and >= {th['wf_min_ratio']:.0%} of in-sample" if th["wf_min_ratio"] > 0 else ""),
         f"{len(folds)} yearly folds re-choosing among {len(grid)} settings: out-of-sample edge Sharpe {_f(oos_sr)} "
         f"vs {_f(mean_is)} in-sample ({_f(ratio, '{:.0%}')} kept).",
         {"folds": folds, "oos_sharpe": oos_sr, "is_sharpe": mean_is, "ratio": ratio},
@@ -527,7 +528,7 @@ def evaluate(
     values.update(dsr=d["dsr"], pbo=p["pbo"], fdr=fdr)
     stages.append(Stage(
         "significance", "Deflated Sharpe & PBO", None, d["dsr"],
-        f"DSR >= {th['dsr_min']} and PBO <= {th['pbo_max']}",
+        f"DSR >= {th['dsr_min']}" + (f" and PBO <= {th['pbo_max']}" if th["pbo_max"] < 1 else " (PBO reported)"),
         f"DSR {_f(d['dsr'], '{:.3f}')} after N = {n_trials} trials on this instrument (luck alone reaches an edge "
         f"Sharpe of {_f(_ann(d['sr0'], dpy))}); PBO {_f(p['pbo'])}; chance it's a false discovery "
         f"{_f(fdr, '{:.0%}')}.",

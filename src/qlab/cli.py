@@ -150,6 +150,7 @@ def calibrate(
     noise_reps: int = typer.Option(100, help="Runs per family and researcher type on noise markets"),
     power_reps: int = typer.Option(40, help="Runs per family, edge size and history length on planted trends"),
     workers: int = typer.Option(0, help="Worker processes; 0 uses all cores but one"),
+    seed: int = typer.Option(1000, help="Base seed; confirm tuned thresholds with a different one"),
 ) -> None:
     """Measure the gauntlet's false-positive rate on noise and its power on planted edges.
 
@@ -157,10 +158,12 @@ def calibrate(
         noise_reps: Noise runs per family and researcher type.
         power_reps: Planted-edge runs per setting.
         workers: Worker processes.
+        seed: Base seed for the simulated markets.
     """
     from .gauntlet.calibration import run_calibration
 
-    rep = run_calibration(noise_reps, power_reps, workers=workers or None, log=typer.echo, actor="cli")
+    rep = run_calibration(noise_reps, power_reps, workers=workers or None, log=typer.echo, actor="cli",
+                          base_seed=seed)
     typer.echo(f"\nReport {rep['id']} ({rep['elapsed_s']} s, {rep['settings']['n_trials']:,} trials recorded)")
     for r in rep["noise"]:
         typer.echo(f"  noise  {r['family']:<14} {r['scenario']:<12} {r['admitted']:>3}/{r['n']:<4} "

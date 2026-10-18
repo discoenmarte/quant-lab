@@ -34,7 +34,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .. import audit, config, ledger
+from .. import audit, code_version, config, ledger
 from ..backtest import metrics
 from ..backtest.engine import COST_PRESETS, run
 from ..backtest.strategies import REGISTRY
@@ -316,7 +316,8 @@ def run_calibration(
         "settings": {"noise_reps": noise_reps, "power_reps": power_reps, "years": list(years),
                      "noise_years": noise_years, "edges": list(edges), "trend_sizes": {str(k): v for k, v in
                                                                                       sizes.items()},
-                     "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed},
+                     "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed,
+                     "code": code_version()},
         **summarise(runs, th),
         "runs": [{k: r[k] for k in ("scenario", "family", "years", "trend", "seed", "values", "admitted",
                                     "failed_stage")} for r in runs],

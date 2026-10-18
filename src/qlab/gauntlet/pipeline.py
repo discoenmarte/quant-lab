@@ -33,7 +33,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .. import __version__, audit, config, db, ledger, lockbox
+from .. import audit, code_version, config, db, ledger, lockbox
 from ..backtest import metrics, runner
 from ..backtest.engine import CostModel, run
 from ..backtest.leakage import future_shift_check
@@ -719,7 +719,7 @@ def run_gauntlet(
                  "source": source, "symbol": symbol, "interval": interval, "costs": model.__dict__,
                  "research": out["research"], "lockbox_from": str(sealed.date()), "lockbox_spent": spent,
                  "grid_size": out["grid_size"], "n_trials": out["n_trials"], "seed": seed,
-                 "data_hash": research_hash, "version": __version__,
+                 "data_hash": research_hash, "version": code_version(),
                  "elapsed_s": round(time.perf_counter() - started, 2), "timings": out["timings"]},
         "thresholds": {"version": version, **th},
         "stages": [asdict(s) for s in stages],

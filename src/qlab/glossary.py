@@ -126,7 +126,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "survivorship": {
         "term": "Survivorship bias",
         "short": "Testing only on assets that still exist today, which hides the ones that failed.",
-        "long": "Free stock data usually has it. The lab starts with ETFs and crypto majors for that reason.",
+        "long": "Free stock data usually has it, so the lab started with ETFs and crypto majors. The crypto "
+        "cross-section avoids it differently: Binance's archive keeps delisted pairs (LUNA, ANC, BTT...), and each "
+        "day's universe is chosen from data up to that day.",
     },
     "slippage": {
         "term": "Slippage and spread",
@@ -163,5 +165,26 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "short": "Hours between recording a decision and the open it fills at.",
         "long": "Positive is the honest case: decided after the close, before the next open. A decision "
         "recorded after the open is kept but marked late, because filling it at that open is optimistic.",
+    },
+    "point_in_time": {
+        "term": "Point-in-time universe",
+        "short": "The instruments a strategy could have chosen from on each date, using only what was known then.",
+        "long": "The crypto universes are the top 30 or 100 pairs by dollar volume over the past 30 days, "
+        "recomputed every day. A coin enters after 30 days of trading and leaves when it falls out of the top N "
+        "or stops trading.",
+    },
+    "availability_mask": {
+        "term": "Availability mask",
+        "short": "Which instrument has a bar on which date, in a panel where instruments list and delist.",
+        "long": "Prices are blank where an instrument doesn't trade. A position in an instrument with no bar the "
+        "next day is sold at its last close, which is optimistic: real delistings come with falling prices "
+        "and wider spreads.",
+    },
+    "drifting_positions": {
+        "term": "Drifting positions",
+        "short": "Between rebalances each holding grows or shrinks with its own price, as in a real account.",
+        "long": "The crypto cross-section is simulated this way. Holding constant fractions would mean "
+        "rebalancing for free every day, a hidden daily trade that is worth several percent a year when coins "
+        "move 5% a day.",
     },
 }

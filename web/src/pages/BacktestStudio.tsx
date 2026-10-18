@@ -10,6 +10,7 @@ import {
   type StrategyDef,
   type TrialRow,
 } from '../api';
+import { AXIS, GRID_LINE, monthlyHeight, monthlyOption } from '../charts';
 import { Badge } from '../components/Badge';
 import { CandleChart, type ChartMarker } from '../components/CandleChart';
 import { Card } from '../components/Card';
@@ -21,9 +22,6 @@ import { useToast } from '../components/Toast';
 import { int, num, pct, tone, utc } from '../format';
 import { useApi } from '../hooks';
 
-const AXIS = '#8a97a8';
-const GRID_LINE = '#151c26';
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
  * Equity (log scale) vs buy-and-hold, drawdown and position, stacked with one shared zoom.
@@ -54,7 +52,7 @@ function performanceOption(r: BacktestReport): EChartsOption {
     xAxis: [axisX(0), axisX(1), axisX(2)],
     yAxis: [
       { type: 'log', gridIndex: 0, axisLabel: { color: AXIS, formatter: (v: number) => `${v.toFixed(1)}x` }, splitLine: { lineStyle: { color: GRID_LINE } } },
-      { type: 'value', gridIndex: 1, max: 0, axisLabel: { color: AXIS, formatter: (v: number) => `${Math.round(v * 100)}%` }, splitLine: { lineStyle: { color: GRID_LINE } } },
+      { type: 'value', gridIndex: 1, max: 0, splitNumber: 2, axisLabel: { color: AXIS, formatter: (v: number) => `${Math.round(v * 100)}%` }, splitLine: { lineStyle: { color: GRID_LINE } } },
       { type: 'value', gridIndex: 2, min: -1, max: 1, interval: 1, axisLabel: { color: AXIS } , splitLine: { show: false } },
     ],
     dataZoom: [
@@ -67,30 +65,6 @@ function performanceOption(r: BacktestReport): EChartsOption {
       { name: 'Drawdown', type: 'line', xAxisIndex: 1, yAxisIndex: 1, showSymbol: false, data: pair(r.series.drawdown), lineStyle: { width: 1, color: '#f87171' }, areaStyle: { color: 'rgba(248,113,113,0.22)' } },
       { name: 'Position', type: 'line', step: 'end', xAxisIndex: 2, yAxisIndex: 2, showSymbol: false, data: pair(r.series.position), lineStyle: { width: 1, color: '#38bdf8' }, areaStyle: { color: 'rgba(56,189,248,0.16)' } },
     ],
-  };
-}
-
-/**
- * Monthly returns heatmap: one row per year, one column per month, red for losses and green for gains.
- *
- * @param r - Backtest report.
- * @returns ECharts option.
- */
-function monthlyOption(r: BacktestReport): EChartsOption {
-  const years = [...new Set(r.monthly.map((m) => m.year))].sort((a, b) => b - a);
-  const data = r.monthly.map((m) => [m.month - 1, years.indexOf(m.year), m.ret]);
-  return {
-    tooltip: {
-      formatter: (p: unknown) => {
-        const v = (p as { value: number[] }).value;
-        return `${MONTHS[v[0]]} ${years[v[1]]}: ${(v[2] * 100).toFixed(1)}%`;
-      },
-    },
-    grid: { left: 44, right: 8, top: 4, bottom: 22 },
-    xAxis: { type: 'category', data: MONTHS, axisLabel: { color: AXIS, fontSize: 10 } },
-    yAxis: { type: 'category', data: years.map(String), axisLabel: { color: AXIS, fontSize: 10 } },
-    visualMap: { min: -0.1, max: 0.1, show: false, inRange: { color: ['#b91c1c', '#3b1d1d', '#141a24', '#0f3b2e', '#059669'] } },
-    series: [{ type: 'heatmap', data, itemStyle: { borderColor: '#0b0f14', borderWidth: 1 } }],
   };
 }
 
@@ -303,7 +277,7 @@ export function BacktestStudio() {
               </Card>
               <div className="grid cols-2">
                 <Card title="Monthly returns">
-                  <EChart option={monthlyOption(report)} height={Math.min(560, new Set(report.monthly.map((m) => m.year)).size * 15 + 40)} />
+                  <EChart option={monthlyOption(report.monthly)} height={monthlyHeight(report.monthly)} />
                 </Card>
                 <Card title="Where the return goes (per year)" term="slippage">
                   <ul className="costbars">

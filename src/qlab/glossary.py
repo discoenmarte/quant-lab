@@ -40,9 +40,38 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "n_trials": {
         "term": "Trial count (N)",
-        "short": "How many backtests were run on this research question. More tries, more luck.",
+        "short": "How many distinct backtests were run on this instrument before the candidate was picked.",
         "long": "Test 5,000 worthless strategies and dozens will look excellent by chance. The lab records "
-        "every trial so the significance bar can rise with N.",
+        "every trial, in every strategy family, so the significance bar can rise with N.",
+    },
+    "edge_sharpe": {
+        "term": "Edge Sharpe (appraisal ratio)",
+        "short": "Sharpe of what the strategy earns beyond simply holding less of the market.",
+        "long": "The return left after removing a fixed position in buy-and-hold. A rule that is 60% invested "
+        "in a rising market scores zero here. Positive exactly when adding the strategy to buy-and-hold "
+        "improves the best mix. The gauntlet judges this, not the raw Sharpe.",
+    },
+    "fdr": {
+        "term": "False-discovery chance",
+        "short": "Probability that a strategy this good has no real edge, given how rare real edges are.",
+        "long": "Bayes' rule with a prior share of real ideas (5% by default) and the size of a real edge "
+        "(Sharpe 0.5). López de Prado, Lipton & Zoonekynd (2026).",
+    },
+    "mintrl": {
+        "term": "Minimum track record",
+        "short": "How many years of returns it takes before this Sharpe is distinguishable from zero.",
+        "long": "Shorter for high Sharpe ratios, longer with fat tails and autocorrelation.",
+    },
+    "calibration": {
+        "term": "Calibration",
+        "short": "Running the gauntlet on fake markets where the truth is known, to measure its error rates.",
+        "long": "Noise markets give the false-positive rate (how often luck passes); markets with a planted "
+        "trend give the power (how often a real edge is caught) for each history length.",
+    },
+    "breakeven": {
+        "term": "Break-even cost",
+        "short": "The cost per trade, in basis points, at which the edge would vanish.",
+        "long": "Gross edge divided by turnover. Far above the modelled cost is safe; close to it is fragile.",
     },
     "psr": {
         "term": "Probabilistic Sharpe Ratio (PSR)",
@@ -52,8 +81,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "dsr": {
         "term": "Deflated Sharpe Ratio (DSR)",
         "short": "PSR, but against the best Sharpe you'd expect from luck after N trials.",
-        "long": "The lab's main gate. A DSR of 0.95 means a 95% chance the edge is real after accounting for "
-        "how many things were tried.",
+        "long": "The lab's main gate. A DSR of 0.95 means a 95% confidence that the edge beats the best "
+        "result luck would produce after the trials already run on this instrument.",
     },
     "pbo": {
         "term": "Probability of Backtest Overfitting (PBO)",
@@ -84,9 +113,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "lockbox": {
         "term": "Lockbox",
-        "short": "The most recent data, kept untouched and used once at the very end.",
-        "long": "Once opened for a strategy family it's burned; reusing it turns it into ordinary "
-        "in-sample data.",
+        "short": "Data from a fixed date on (2024-10-01), kept untouched and used once at the very end.",
+        "long": "Spent per research question the first time anything looks at it, including a Backtest Studio "
+        "run that reaches past the date. After that, only forward paper trading is independent evidence.",
     },
     "lookahead": {
         "term": "Look-ahead bias",

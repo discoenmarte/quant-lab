@@ -1,4 +1,5 @@
-"""Command line entry point: ``qlab serve | init | ingest | backtest | gauntlet | calibrate | bench | demo``.
+"""Command line entry point: ``qlab serve | init | ingest | backtest | portfolio | gauntlet | portfolio-gauntlet |
+calibrate | bench | demo``.
 
 More commands arrive with each milestone (inbox, mine).
 """
@@ -135,7 +136,64 @@ def gauntlet(
     """
     from .gauntlet.pipeline import run_gauntlet
 
-    card = run_gauntlet(source, symbol, interval, strategy, _parse_params(params), costs, seed, actor="cli")
+    _print_card(run_gauntlet(source, symbol, interval, strategy, _parse_params(params), costs, seed, actor="cli"))
+
+
+@app.command()
+def portfolio(
+    universe: str = typer.Argument("multi_asset", help="Universe name; see /api/portfolio/universes"),
+    strategy: str = typer.Option("tsmom", help="Portfolio strategy; see /api/portfolio/strategies"),
+    params: str = typer.Option("", help="Overrides, e.g. lookback=252,target_vol=0.1"),
+    include_lockbox: bool = typer.Option(False, help="Reach into the sealed period (spends this question's lockbox)"),
+) -> None:
+    """Backtest a portfolio strategy, record the trial, and print it next to equal weight.
+
+    Args:
+        universe: Universe name.
+        strategy: Portfolio strategy key.
+        params: Parameter overrides.
+        include_lockbox: Include the sealed lockbox period.
+    """
+    from .portfolio import runner
+
+    panel, res, summary = runner.backtest(universe, strategy, _parse_params(params), include_lockbox=include_lockbox)
+    rep = runner.report(panel, res, summary)
+    s, b = rep["stats"]["strategy"], rep["stats"]["benchmark"]
+    typer.echo(f"{summary['question']}  {summary['start']} -> {summary['end']}  trial {summary['trial_id']} "
+               f"(N = {summary['n_trials']})  {len(panel.symbols)} instruments")
+    for label, key, fmt in [("CAGR", "cagr", "{:+.2%}"), ("Sharpe", "sharpe", "{:.2f}"),
+                            ("Max drawdown", "max_dd", "{:.1%}"), ("Volatility", "vol", "{:.1%}")]:
+        typer.echo(f"  {label:<13} strategy {fmt.format(s[key]):>9}   equal weight {fmt.format(b[key]):>9}")
+    typer.echo(f"  edge Sharpe {s['edge_sharpe']:.2f}, beta {s['beta']:.2f}, gross exposure {s['gross_exposure']:.2f}, "
+               f"turnover {s['turnover']:.1f}/yr")
+
+
+@app.command("portfolio-gauntlet")
+def portfolio_gauntlet(
+    universe: str = typer.Argument("multi_asset", help="Universe name"),
+    strategy: str = typer.Option("tsmom", help="Portfolio strategy"),
+    params: str = typer.Option("", help="Candidate parameters"),
+    seed: int = typer.Option(7, help="Seed for the grid fill, permutations and bootstrap"),
+) -> None:
+    """Run a portfolio strategy through the ten-stage gauntlet and print its report card.
+
+    Args:
+        universe: Universe name.
+        strategy: Portfolio strategy key.
+        params: Candidate parameters.
+        seed: Random seed.
+    """
+    from .gauntlet.pipeline import run_portfolio_gauntlet
+
+    _print_card(run_portfolio_gauntlet(universe, strategy, _parse_params(params), seed, actor="cli"))
+
+
+def _print_card(card: dict) -> None:
+    """Print a report card as one line per stage.
+
+    Args:
+        card: Report card.
+    """
     m = card["meta"]
     typer.echo(f"{m['question']}  card {card['card_id']}  research {m['research'][0]} -> {m['research'][1]}  "
                f"N = {m['n_trials']}  ({m['elapsed_s']} s)")
@@ -151,6 +209,7 @@ def calibrate(
     power_reps: int = typer.Option(40, help="Runs per family, edge size and history length on planted trends"),
     workers: int = typer.Option(0, help="Worker processes; 0 uses all cores but one"),
     seed: int = typer.Option(1000, help="Base seed; confirm tuned thresholds with a different one"),
+    portfolio_reps: int = typer.Option(40, help="Noise runs per portfolio family and researcher type; 0 skips"),
 ) -> None:
     """Measure the gauntlet's false-positive rate on noise and its power on planted edges.
 
@@ -159,11 +218,12 @@ def calibrate(
         power_reps: Planted-edge runs per setting.
         workers: Worker processes.
         seed: Base seed for the simulated markets.
+        portfolio_reps: Noise runs per portfolio family and researcher type.
     """
     from .gauntlet.calibration import run_calibration
 
     rep = run_calibration(noise_reps, power_reps, workers=workers or None, log=typer.echo, actor="cli",
-                          base_seed=seed)
+                          base_seed=seed, portfolio_reps=portfolio_reps)
     typer.echo(f"\nReport {rep['id']} ({rep['elapsed_s']} s, {rep['settings']['n_trials']:,} trials recorded)")
     for r in rep["noise"]:
         typer.echo(f"  noise  {r['family']:<14} {r['scenario']:<12} {r['admitted']:>3}/{r['n']:<4} "

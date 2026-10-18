@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .. import audit, config, ledger
+from .. import audit, config, ledger, lockbox
 from ..data import store
 from ..data.ingest import SOURCES
 from . import metrics
@@ -120,8 +120,12 @@ def backtest(
     start: str | None = None,
     end: str | None = None,
     record_as: str | None = "studio",
+    include_lockbox: bool = False,
 ) -> tuple[BacktestResult, dict[str, Any]]:
     """Backtest a registered strategy and, unless told not to, record it in the ledger.
+
+    Runs stop the day before the lockbox unless ``include_lockbox`` is set. Including it is allowed, but the
+    trial then covers sealed dates, which spends the lockbox of this research question (see ``qlab.lockbox``).
 
     Args:
         source: Source name.
@@ -134,9 +138,12 @@ def backtest(
         end: Last date, ``YYYY-MM-DD``.
         record_as: Ledger source tag (``studio``, ``gauntlet``, ``mining``...). None skips recording, which
             only internal re-runs of an already-recorded trial should do.
+        include_lockbox: Let the run reach into the sealed period, spending this question's lockbox.
 
     Returns:
-        ``(result, summary)`` where summary holds the metrics, the trial id and N for the question.
+        ``(result, summary)`` where summary holds the metrics (including edge Sharpe), the trial id, N for the
+        question, and ``lockbox`` (sealed date, whether this run included it, whether the question's lockbox
+        is spent).
 
     Raises:
         KeyError: Unknown strategy.
@@ -144,12 +151,14 @@ def backtest(
     """
     strat = REGISTRY[strategy]
     full_params = {**strat.defaults(), **(params or {})}
-    bars = load_bars(source, symbol, interval, start, end)
+    bars = load_bars(source, symbol, interval, start, end if include_lockbox else lockbox.clamp_end(end))
+    if bars.empty:
+        raise ValueError("no bars in the requested period before the lockbox")
     model = resolve_costs(costs, source)
     rf = risk_free(source, bars, interval)
     result = run(bars, strat.positions(bars, full_params), model, rf)
     ppy = periods_per_year(source, interval)
-    stats = metrics.summary(result.returns, rf, ppy, result.position)
+    stats = metrics.summary(result.returns, rf, ppy, result.position, benchmark=result.benchmark)
     question = f"{strat.family}:{symbol}:{interval}"
     summary: dict[str, Any] = {
         "question": question,
@@ -171,6 +180,9 @@ def backtest(
             data_hash=store.data_hash(bars),
         )
     summary["n_trials"] = ledger.count_trials(question)
+    sealed = lockbox.sealed_from()
+    summary["lockbox"] = {"sealed_from": str(sealed.date()), "included": bool(bars["ts"].iloc[-1] >= sealed),
+                          "spent": lockbox.spent(question)}
     return result, summary
 
 
@@ -216,7 +228,7 @@ def report(result: BacktestResult, summary: dict[str, Any]) -> dict[str, Any]:
     closed = trades.dropna(subset=["exit_ts"])
     rep = {
         "meta": {k: summary[k] for k in ("strategy", "params", "source", "symbol", "interval", "start", "end",
-                                          "question", "trial_id", "n_trials", "costs")},
+                                          "question", "trial_id", "n_trials", "costs", "lockbox")},
         "stats": {
             "strategy": summary["metrics"],
             "benchmark": metrics.summary(result.benchmark, None, ppy),

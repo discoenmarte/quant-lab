@@ -28,6 +28,7 @@ class RunRequest(BaseModel):
         costs: ``"auto"``, a preset name, or a dict of cost-model fields in basis points.
         start: First date, ``YYYY-MM-DD``.
         end: Last date, ``YYYY-MM-DD``.
+        include_lockbox: Let the run reach into the sealed lockbox period, which spends that question's lockbox.
     """
 
     source: str
@@ -38,6 +39,7 @@ class RunRequest(BaseModel):
     costs: str | dict[str, float] = "auto"
     start: str | None = None
     end: str | None = None
+    include_lockbox: bool = False
 
 
 @router.get("/strategies")
@@ -91,16 +93,20 @@ def run_backtest(req: RunRequest) -> dict[str, Any]:
         The report (see ``backtest.runner.report``).
 
     Raises:
-        HTTPException: 404 for an unknown strategy or a series that isn't ingested; 400 for a bad cost preset.
+        HTTPException: 404 for an unknown strategy or a series that isn't ingested; 400 for a bad cost preset or
+            an empty period.
     """
     if req.strategy not in REGISTRY:
         raise HTTPException(status_code=404, detail=f"unknown strategy {req.strategy}")
     try:
         result, summary = runner.backtest(
-            req.source, req.symbol, req.interval, req.strategy, req.params, req.costs, req.start, req.end
+            req.source, req.symbol, req.interval, req.strategy, req.params, req.costs, req.start, req.end,
+            include_lockbox=req.include_lockbox,
         )
     except FileNotFoundError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
     except KeyError as err:
         raise HTTPException(status_code=400, detail=f"unknown cost preset {err}") from err
     return runner.report(result, summary)

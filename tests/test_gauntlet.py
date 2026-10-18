@@ -18,7 +18,7 @@ from qlab.gauntlet import calibration, pipeline, stats, thresholds
 from qlab.gauntlet.nulls import permuted_bars, stationary_bootstrap
 from qlab.gauntlet.pbo import pbo
 
-FAST = {"n_perm": 30, "n_boot": 60, "grid_max": 40}
+FAST = {"n_perm": 60, "n_boot": 60, "grid_max": 40}
 
 
 def bars_from(log_returns: np.ndarray, start: str = "2010-01-04") -> pd.DataFrame:
@@ -151,6 +151,8 @@ def test_thresholds_are_versioned_and_need_a_reason():
         thresholds.update({"nope": 1}, "typo")
     with pytest.raises(ValueError):
         thresholds.update({"lockbox_from": "next year"}, "bad date")
+    with pytest.raises(ValueError, match="could never pass"):
+        thresholds.update({"n_perm": 30, "perm_max_p": 0.02}, "too few shuffles")
     assert thresholds.update({"perm_max_p": 0.02}, "calibration") == v1 + 1
     assert thresholds.current()[1]["perm_max_p"] == 0.02
 

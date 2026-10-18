@@ -97,7 +97,8 @@ def update(changes: dict[str, Any], reason: str, actor: str = "user") -> int:
         The new version number.
 
     Raises:
-        ValueError: Empty reason, no changes, or an invalid key or value.
+        ValueError: Empty reason, no changes, an invalid key or value, or a permutation level that the number of
+            shuffles can't reach.
     """
     if not reason.strip():
         raise ValueError("a reason is required to change thresholds")
@@ -107,6 +108,10 @@ def update(changes: dict[str, Any], reason: str, actor: str = "user") -> int:
         _validate(k, v)
     version, cfg = current()
     new = {**cfg, **changes}
+    if (new["n_perm"] + 1) * new["perm_max_p"] < 1:
+        # The smallest permutation p-value is 1 / (n_perm + 1); below the level, the stage could never pass.
+        raise ValueError(f"with {int(new['n_perm'])} shuffles the smallest p-value is {1 / (new['n_perm'] + 1):.3f}, "
+                         f"above the {new['perm_max_p']} level: the permutation stage could never pass")
     with db.connect() as con:
         con.execute(
             "INSERT INTO thresholds (version, created_at, reason, config) VALUES (?, ?, ?, ?)",

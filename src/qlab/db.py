@@ -102,6 +102,42 @@ SCHEMA = [
         card_id VARCHAR,
         used_at TIMESTAMP
     )""",
+    # M7a: the forward paper book. Entries are report cards being tracked; decisions are append-only and each
+    # is stored before the bar it will be scored on exists; scores keep one row per scoring that saw new bars.
+    """CREATE TABLE IF NOT EXISTS paper_entries (
+        entry_id VARCHAR PRIMARY KEY,
+        card_id VARCHAR,
+        kind VARCHAR,
+        question VARCHAR,
+        family VARCHAR,
+        strategy VARCHAR,
+        scope VARCHAR,
+        params VARCHAR,
+        verdict VARCHAR,
+        added_at TIMESTAMP,
+        status VARCHAR,
+        note VARCHAR,
+        reference VARCHAR,
+        retired_at TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS paper_decisions (
+        entry_id VARCHAR,
+        as_of DATE,
+        decided_at TIMESTAMP,
+        targets VARCHAR,
+        next_open TIMESTAMP,
+        inputs_hash VARCHAR,
+        code_version VARCHAR,
+        PRIMARY KEY (entry_id, as_of)
+    )""",
+    """CREATE TABLE IF NOT EXISTS paper_scores (
+        entry_id VARCHAR,
+        scored_at TIMESTAMP,
+        through DATE,
+        n_days INTEGER,
+        summary VARCHAR,
+        trial_id VARCHAR
+    )""",
 ]
 
 

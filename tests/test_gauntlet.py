@@ -285,18 +285,19 @@ def test_deflate_keeps_the_old_formula_and_lowers_the_bar_without_the_outlier():
     assert short["luck_var_annual"] == pytest.approx(capped["luck_var_annual"] * 5 / 4)
 
 
-def test_versions_saved_before_the_variance_key_keep_the_sample_variance(monkeypatch):
-    """A key added later never changes an earlier version; new versions can choose any offered method."""
+def test_versions_saved_before_the_variance_key_keep_the_sample_variance():
+    """A fresh lab starts on the calibrated method, a version saved before the key existed keeps the sample
+    variance, and new versions can choose any offered method."""
     from qlab import db
 
+    assert thresholds.current() == (1, thresholds.DEFAULT) and thresholds.DEFAULT["dsr_variance"] == "luck_max"
     with db.connect() as con:
-        con.execute("INSERT INTO thresholds (version, created_at, reason, config) VALUES (1, now(), 'old', ?)",
+        con.execute("INSERT INTO thresholds (version, created_at, reason, config) VALUES (2, now(), 'old', ?)",
                     [db.dumps({k: v for k, v in thresholds.DEFAULT.items() if k != "dsr_variance"})])
-    monkeypatch.setitem(thresholds.DEFAULT, "dsr_variance", "luck_bound")
     assert thresholds.current()[1]["dsr_variance"] == "sample"
     with pytest.raises(ValueError, match="dsr_variance must be one of"):
         thresholds.update({"dsr_variance": "positive_gross"}, "study-only rule")
-    assert thresholds.update({"dsr_variance": "upper_half"}, "test") == 2
+    assert thresholds.update({"dsr_variance": "upper_half"}, "test") == 3
     assert thresholds.current()[1]["dsr_variance"] == "upper_half"
 
 
@@ -310,7 +311,7 @@ def test_variance_study_compares_every_method_on_the_same_runs(fast_thresholds):
     assert {r["scenario"] for r in runs} == {"noise_tuned", "noise_batch", "power_tuned", "power_batch"}
     for r in runs:
         assert set(r["dsr_by"]) == set(calibration.STUDY_METHODS)
-        assert r["dsr_by"]["sample"] == pytest.approx(r["values"]["dsr"])
+        assert r["dsr_by"][rep["thresholds"]["dsr_variance"]] == pytest.approx(r["values"]["dsr"])
     batch = [r for r in runs if r["scenario"] == "noise_batch"]
     assert len({r["seed"] for r in batch}) == 1 and len({r["family"] for r in batch}) == n_families
     assert set(rep["by_method"]) == set(calibration.STUDY_METHODS)

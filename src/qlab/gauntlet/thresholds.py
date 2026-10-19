@@ -14,6 +14,12 @@ A confirmation study on fresh seeds then showed the pooled rate hiding a family 
 advance passed noise 7% of the time, because the permutation test and the Deflated Sharpe are almost perfectly
 correlated and both run slightly hot under volatility clustering. The permutation level is therefore 0.02, which
 keeps every family at or below 5%, at the cost of catching that edge about 48% of the time with 20 years.
+
+Version 3 changes how the Deflated Sharpe estimates the spread of trial Sharpes (``dsr_variance``, decision 0004
+addendum). The sample variance let real differences between trials, such as a daily rule's costs, raise the luck
+threshold: in pre-registered crypto batches on noise it reached an edge Sharpe of 1.7-2.7, and planted edges
+inside a batch were almost never caught. ``luck_max`` caps the spread at the widest luck can produce. In two
+studies on separate seeds it kept every noise family at or below 2.5% and more than doubled the power in batches.
 """
 
 from __future__ import annotations
@@ -45,7 +51,7 @@ DEFAULT: dict[str, Any] = {
     "regime_min_share": 0.6,       # regimes: share of regimes with a positive net return
     "max_corr": 0.5,               # diversification: correlation to the validated portfolio
     "grid_max": 300,               # parameter grid: most configurations evaluated per run
-    "dsr_variance": "sample",      # significance: how the spread of trial Sharpes is estimated (see stats)
+    "dsr_variance": "luck_max",    # significance: how the spread of trial Sharpes is estimated (see stats)
 }
 
 # Values that reproduce how versions saved before a key existed judged. A key missing from a stored version takes

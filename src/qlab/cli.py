@@ -275,6 +275,13 @@ def calibrate(
         typer.echo(f"  power  {r['family']:<14} edge {r['true_edge']:.2f}  {r['years']:>4g} y  "
                    f"{r['admitted']:>3}/{r['n']:<4} {r['rate']:6.1%}")
     typer.echo(rep["headline"])
+    for basis, s in rep["by_regime_basis"].items():
+        worst = max(s["noise"], key=lambda r: r["rate"]) if s["noise"] else None
+        typer.echo(f"\nRegimes judging the {basis}: noise {s['fpr_overall']:.2%} pooled"
+                   + (f", worst {worst['scenario']} {worst['family']} {worst['rate']:.1%}" if worst else ""))
+        for r in s["power"]:
+            typer.echo(f"  power  {r['family']:<28} edge {r['true_edge']:.2f}  {r['years']:>4g} y  "
+                       f"{r['admitted']:>3}/{r['n']:<4} {r['rate']:6.1%}")
 
 
 @app.command("calibrate-variance")

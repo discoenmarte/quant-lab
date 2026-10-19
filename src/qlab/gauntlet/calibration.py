@@ -54,7 +54,7 @@ from ..portfolio.strategies import REGISTRY as PORTFOLIOS
 from ..portfolio.synthetic import synthetic_crypto_panel, synthetic_panel
 from ..timeutil import naive_utc
 from . import stats, thresholds
-from .pipeline import STAGES, build_grid, clean, column_sharpes, deflate, edge_matrix, evaluate, judge
+from .pipeline import STAGES, build_grid, clean, column_sharpes, deflate, edge_matrix, evaluate, judge, regime_basis
 from .subjects import BarSubject, PanelSubject
 
 DPY = 252
@@ -526,7 +526,8 @@ def run_calibration(
 
     Returns:
         The report: ``id``, ``created_at``, ``thresholds_version``, ``settings``, ``noise``, ``power``,
-        ``control``, ``fpr_overall``, ``headline`` and ``elapsed_s``.
+        ``control``, ``fpr_overall``, ``headline``, ``by_regime_basis`` (``summarise`` with the regimes stage judging
+        the edge and the net return, on the same runs) and ``elapsed_s``.
     """
     started = time.perf_counter()
     code = code_version()  # stamped before the runs, so later edits to the working tree can't mislabel them
@@ -633,6 +634,7 @@ def run_calibration(
                      "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed,
                      "code": code},
         **summarise(runs, th),
+        "by_regime_basis": {b: summarise(runs, {**th, "regime_basis": b}) for b in thresholds.REGIME_BASES},
         "runs": [{k: r[k] for k in ("scenario", "family", "years", "trend", "seed", "values", "admitted",
                                     "failed_stage")} for r in runs],
         "elapsed_s": round(time.perf_counter() - started, 1),
@@ -937,10 +939,14 @@ def rejudge(run_id: str, changes: dict[str, Any]) -> dict[str, Any]:
 
     Raises:
         FileNotFoundError: Unknown report.
+        ValueError: The changes ask the regimes stage to judge the edge, and the report's runs predate the edge by
+            regime.
     """
     rep = load_report(run_id)
     th = {**rep["thresholds"], **changes}
     runs = rep["runs"]
+    if regime_basis(th) == "edge" and any("regime_edge_share" not in r["values"] for r in runs):
+        raise ValueError(f"calibration {run_id} didn't measure the edge by regime; run a new calibration to judge it")
     truth = {(p["family"], p["trend"]): p["true_edge"] for p in rep["power"]}
     for r in runs:
         r["values"] = {k: (float("nan") if v is None else v) for k, v in r["values"].items()}

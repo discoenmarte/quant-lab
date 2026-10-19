@@ -90,7 +90,7 @@ class RejudgeRequest(BaseModel):
         changes: Threshold overrides to evaluate.
     """
 
-    changes: dict[str, float]
+    changes: dict[str, float | str]
 
 
 @router.get("/stages")
@@ -338,9 +338,11 @@ def rejudge(run_id: str, req: RejudgeRequest) -> dict[str, Any]:
         ``noise``, ``power``, ``control`` and ``fpr_overall``.
 
     Raises:
-        HTTPException: 404 for an unknown report.
+        HTTPException: 404 for an unknown report, 400 when its runs lack a value the changes need.
     """
     try:
         return calibration.rejudge(run_id, req.changes)
     except FileNotFoundError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err

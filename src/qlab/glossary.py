@@ -140,7 +140,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
     "regime": {
         "term": "Regime",
         "short": "A market state, such as bull, bear, calm or volatile.",
-        "long": "A robust strategy shouldn't depend on one regime that may not come back.",
+        "long": "A robust strategy shouldn't depend on one regime that may not come back. From thresholds v4 the "
+        "regimes stage asks whether the edge over the passive alternative is positive in at least 60% of regimes; "
+        "the net return in each is shown beside it. Making money after costs is the costs stage's job (net CAGR > 0).",
     },
     "paper_book": {
         "term": "Forward paper book",

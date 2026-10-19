@@ -98,9 +98,9 @@ export const NAV: { group: string; items: NavItem[] }[] = [
         label: 'Research Inbox',
         icon: 'inbox',
         milestone: 'M4',
-        ready: false,
+        ready: true,
         blurb: 'New papers, scored and turned into testable specs by a local model.',
-        planned: ['Paper feed with rubric scores', 'Spec review: paper, spec and code side by side'],
+        planned: ['Full-text reading of the best papers (PDF)', 'New strategy templates for papers no template fits'],
       },
       {
         path: '/mining',

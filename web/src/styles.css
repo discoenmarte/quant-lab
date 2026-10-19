@@ -269,3 +269,10 @@ pre.small { margin: 0 0 10px; white-space: pre-wrap; }
 .trade-mode.bad { color: var(--bad); border-color: rgba(248, 113, 113, 0.5); background: rgba(248, 113, 113, 0.08); }
 .btn.kill { font-weight: 700; letter-spacing: 0.06em; padding: 3px 10px; }
 .btn.kill.armed { background: #7f1d1d; border-color: #dc2626; color: #fff; }
+
+/* M4: rubric dots and the spec editor */
+.dots { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; }
+.rubric-dot { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--border-2); }
+.rubric-dot.on { background: var(--accent); border-color: var(--accent); }
+textarea.code { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--bg-2);
+  color: var(--text); border: 1px solid var(--border-2); border-radius: 6px; padding: 6px; }

@@ -23,6 +23,27 @@ const WHAT_IF: { key: string; label: string; step: number }[] = [
   { key: 'regime_min_share', label: 'Regimes positive ≥', step: 0.05 },
 ];
 
+/** Who chose the candidate in each calibration scenario. */
+const RESEARCHER: Record<string, string> = {
+  noise_fixed: 'fixed in advance (N = 1)',
+  noise_tuned: 'kept the best of the grid',
+  noise_batch: 'pre-registered batch',
+  power: 'fixed in advance (N = 1)',
+  power_tuned: 'kept the best of the grid',
+  power_batch: 'pre-registered batch',
+};
+
+/**
+ * Legend key of a power row: family and planted edge, plus the researcher when it isn't fixed in advance.
+ *
+ * @param p - Power row.
+ * @returns Series name.
+ */
+function powerKey(p: CalibrationSummary['power'][number]): string {
+  const who = p.scenario && p.scenario !== 'power' ? ` · ${p.scenario === 'power_batch' ? 'batch' : 'best of grid'}` : '';
+  return `${p.family} · edge ${num(p.true_edge)}${who}`;
+}
+
 /**
  * Power curves: detection rate against history length, one line per family and planted edge.
  *
@@ -30,7 +51,7 @@ const WHAT_IF: { key: string; label: string; step: number }[] = [
  * @returns ECharts option.
  */
 function powerOption(s: CalibrationSummary): EChartsOption {
-  const keys = [...new Set(s.power.map((p) => `${p.family} · edge ${num(p.true_edge)}`))];
+  const keys = [...new Set(s.power.map(powerKey))];
   return {
     animation: false,
     legend: { data: keys, textStyle: { color: AXIS }, top: 0 },
@@ -42,7 +63,7 @@ function powerOption(s: CalibrationSummary): EChartsOption {
       ...keys.map((k, i) => ({
         name: k,
         type: 'line' as const,
-        data: s.power.filter((p) => `${p.family} · edge ${num(p.true_edge)}` === k).sort((a, b) => a.years - b.years).map((p) => [p.years, p.rate]),
+        data: s.power.filter((p) => powerKey(p) === k).sort((a, b) => a.years - b.years).map((p) => [p.years, p.rate]),
         lineStyle: { color: COLORS[i % COLORS.length] },
         itemStyle: { color: COLORS[i % COLORS.length] },
       })),
@@ -178,7 +199,7 @@ export function CalibrationPanel() {
               rowKey={(r) => `${r.family}-${r.scenario}`}
               columns={[
                 { key: 'family', label: 'Family', sort: (r) => r.family },
-                { key: 'scenario', label: 'Researcher', render: (r) => (r.scenario === 'noise_fixed' ? 'fixed in advance (N = 1)' : 'kept the best of the grid') },
+                { key: 'scenario', label: 'Researcher', render: (r) => RESEARCHER[r.scenario] },
                 { key: 'years', label: 'Years', align: 'right', render: (r) => int(r.years) },
                 { key: 'adm', label: 'Admitted', align: 'right', render: (r) => `${r.admitted} / ${r.n}` },
                 { key: 'rate', label: 'Rate', align: 'right', sort: (r) => r.rate, render: (r) => <span className={r.rate > 0.05 ? 'down' : ''}>{pct(r.rate, 1)}</span> },
@@ -191,9 +212,10 @@ export function CalibrationPanel() {
           <Card title="Planted edges: how often a real edge is caught">
             <DataTable
               rows={shown.power}
-              rowKey={(r) => `${r.family}-${r.trend}-${r.years}`}
+              rowKey={(r) => `${r.family}-${r.scenario ?? 'power'}-${r.trend}-${r.years}`}
               columns={[
                 { key: 'family', label: 'Family', sort: (r) => r.family },
+                { key: 'scenario', label: 'Researcher', render: (r) => RESEARCHER[r.scenario ?? 'power'] },
                 { key: 'edge', label: 'True edge Sharpe', align: 'right', sort: (r) => r.true_edge, render: (r) => num(r.true_edge) },
                 { key: 'years', label: 'Years', align: 'right', sort: (r) => r.years, render: (r) => int(r.years) },
                 { key: 'adm', label: 'Admitted', align: 'right', render: (r) => `${r.admitted} / ${r.n}` },

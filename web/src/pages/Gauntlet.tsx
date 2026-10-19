@@ -46,6 +46,7 @@ const THRESHOLD_DOCS: Record<string, string> = {
   regime_min_share: 'Regimes: share with positive return',
   max_corr: 'Diversification: correlation to validated portfolio at most',
   grid_max: 'Grid: most settings per run',
+  dsr_variance: 'Significance: spread of trial Sharpes (sample, upper_half, mad, luck_bound)',
 };
 
 /**
@@ -216,7 +217,7 @@ function ThresholdsPanel() {
   const [reason, setReason] = useState('');
 
   async function save() {
-    const v = key === 'lockbox_from' ? value : Number(value);
+    const v = typeof th.data?.config[key] === 'string' ? value : Number(value);
     try {
       const res = await post<{ version: number }>('/gauntlet/thresholds', { changes: { [key]: v }, reason });
       notify(`Thresholds v${res.version} saved. Earlier cards keep the version they were judged with.`, 'ok');

@@ -361,8 +361,14 @@ export interface RateRow {
 }
 
 export interface CalibrationSummary {
-  noise: (RateRow & { family: string; scenario: 'noise_fixed' | 'noise_tuned'; years: number })[];
-  power: (RateRow & { family: string; trend: number; true_edge: number; years: number })[];
+  noise: (RateRow & { family: string; scenario: 'noise_fixed' | 'noise_tuned' | 'noise_batch'; years: number })[];
+  power: (RateRow & {
+    family: string;
+    scenario?: 'power' | 'power_tuned' | 'power_batch';
+    trend: number;
+    true_edge: number;
+    years: number;
+  })[];
   control: {
     family: string;
     years: number;

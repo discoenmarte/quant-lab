@@ -53,8 +53,8 @@ from ..portfolio.engine import run_portfolio
 from ..portfolio.strategies import REGISTRY as PORTFOLIOS
 from ..portfolio.synthetic import synthetic_crypto_panel, synthetic_panel
 from ..timeutil import naive_utc
-from . import thresholds
-from .pipeline import STAGES, build_grid, clean, column_sharpes, edge_matrix, evaluate, judge
+from . import stats, thresholds
+from .pipeline import STAGES, build_grid, clean, column_sharpes, deflate, edge_matrix, evaluate, judge
 from .subjects import BarSubject, PanelSubject
 
 DPY = 252
@@ -71,6 +71,15 @@ XS_POWER = ["xs_weekly_momentum", "xs_small_size"]  # planted momentum, planted 
 XS_YEARS = 5.6  # the research length of the crypto universes (2019-02-14 to the lockbox)
 XS_COINS = {30: 120, 100: 300}  # universe size -> coins that ever trade in the synthetic market
 XS_TRUTH_YEARS, XS_TRUTH_SEEDS = 50.0, 8  # true edges average eight 50-year markets (standard error near 0.05)
+# Pre-registered batches for the variance study: every rule runs its defaults on the same market. The crypto batch
+# mixes weekly rules with daily reversal, whose costs alone push its edge far below the others.
+BATCHES = {
+    "single": NOISE_FAMILIES,
+    "portfolio": PORTFOLIO_NOISE,
+    "xs30": [f"xs30/{k}" for k in XS_STRATEGIES],
+    "xs100": [f"xs100/{k}" for k in XS_STRATEGIES],
+}
+STUDY_METHODS = (*stats.VARIANCE_METHODS, "positive_gross")  # positive_gross is measured, not offered
 
 
 def _xs_parts(family: str) -> tuple[int, str]:
@@ -228,6 +237,27 @@ def true_edge(family: str, trend: float, years: float = 400.0, seed: int = 12345
     return float(metrics.sharpe(e, None, DPY))
 
 
+def trend_sizes(family: str, edges: tuple[float, ...], steps: int) -> dict[float, float]:
+    """Planted trend sizes that give a family's default rule each target true edge, by bisection on [0, 1].
+
+    Args:
+        family: ``trend_sma`` for single instruments or ``portfolio/tsmom`` for panels (see ``true_edge``).
+        edges: Target edge Sharpes.
+        steps: Bisection steps (10 gives a size to about 0.001).
+
+    Returns:
+        ``{target: trend size}``.
+    """
+    sizes = {}
+    for target in edges:
+        lo, hi = 0.0, 1.0
+        for _ in range(steps):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if true_edge(family, mid) < target else (lo, mid)
+        sizes[target] = round((lo + hi) / 2, 4)
+    return sizes
+
+
 def make_subject(task: dict[str, Any]) -> BarSubject | PanelSubject:
     """The synthetic market of one calibration run, as a gauntlet subject with no lockbox.
 
@@ -256,27 +286,120 @@ def _one(task: dict[str, Any]) -> dict[str, Any]:
     """Run the gauntlet once on a synthetic market. Executed in a worker process.
 
     Args:
-        task: ``scenario`` (``noise_fixed``, ``noise_tuned`` or ``power``), ``family``, ``years``, ``trend``,
-            ``seed`` and ``th`` (thresholds).
+        task: ``scenario`` (``noise_fixed``, ``noise_tuned``, ``power`` or ``power_tuned``), ``family``,
+            ``years``, ``trend``, ``seed`` and ``th`` (thresholds).
 
     Returns:
-        The task plus ``values`` (stage measurements), ``passed`` (per stage), ``admitted``, ``failed_stage``,
-        ``params`` and compact grid ``records`` for the ledger.
+        The output of ``_finish``.
     """
     th = task["th"]
     subject = make_subject(task)
     params = subject.strat.defaults()
     selection: list[float] = []
+    gross: list[float] = []
     counted = False
     if task["scenario"].endswith("tuned"):
         # A researcher who searched the whole grid and kept the in-sample best, honestly counting every try.
         grid = build_grid(subject, params, int(th["grid_max"]), task["seed"])
         sims = [subject.simulate(cfg) for cfg in grid]
         e, _ = edge_matrix(np.column_stack([x.net for x in sims]), sims[0].bench)
-        sr = column_sharpes(e) * math.sqrt(subject.dpy)
+        g, _ = edge_matrix(np.column_stack([x.gross for x in sims]), sims[0].bench)
+        sr, gsr = column_sharpes(e) * math.sqrt(subject.dpy), column_sharpes(g) * math.sqrt(subject.dpy)
         params = grid[int(np.nanargmax(sr))]
-        selection, counted = [float(x) for x in sr[np.isfinite(sr)]], True
-    out = evaluate(subject, params, th=th, selection=selection, candidate_counted=counted, seed=task["seed"])
+        ok = np.isfinite(sr)
+        selection, gross, counted = [float(x) for x in sr[ok]], [float(x) for x in gsr[ok]], True
+    return _finish(task, subject, params, selection, gross, counted)
+
+
+def batch_subjects(market: str, years: float, trend: float, seed: int) -> list[BarSubject | PanelSubject]:
+    """The members of a pre-registered batch, every rule of ``BATCHES[market]`` on one synthetic market.
+
+    Args:
+        market: A key of ``BATCHES``: ``single`` (synthetic bars), ``portfolio`` (an eight-asset panel), ``xs30``
+            or ``xs100`` (a crypto cross-section).
+        years: Length in years.
+        trend: Planted trend shared by every member (0 for noise). Cross-sections get planted momentum.
+        seed: Random seed of the market.
+
+    Returns:
+        One subject per member, in ``BATCHES`` order.
+    """
+    if market.startswith("xs"):
+        top = int(market[2:])
+        panel = synthetic_crypto_panel(years, XS_COINS[top], top, trend=trend, seed=seed)
+        return [PanelSubject(panel, _xs_parts(f)[1], panel.ts[-1] + pd.Timedelta(days=1), f"synthetic_crypto{top}")
+                for f in BATCHES[market]]
+    if market == "portfolio":
+        panel = synthetic_panel(years, PORTFOLIO_ASSETS, trend, seed)
+        return [PanelSubject(panel, f.split("/", 1)[1], panel.ts[-1] + pd.Timedelta(days=1), "synthetic")
+                for f in BATCHES[market]]
+    bars = synthetic_bars(years, trend, seed)
+    return [BarSubject(bars, f, bars["ts"].iloc[-1] + pd.Timedelta(days=1), source="synthetic", symbol="SYNTH",
+                       interval="1d", model=COST_PRESETS["etf"], rf=None, dpy=DPY) for f in BATCHES[market]]
+
+
+def _batch_one(task: dict[str, Any]) -> dict[str, Any]:
+    """Judge one member of a pre-registered batch, deflated against the whole batch. Executed in a worker process.
+
+    This is ``pipeline.judge_batch`` on a synthetic market with no prior trials: every member runs its published
+    defaults, and each is deflated against the edges of all of them.
+
+    Args:
+        task: ``scenario`` (``noise_batch`` or ``power_batch``), ``market``, ``member`` (index into
+            ``BATCHES[market]``), ``family``, ``years``, ``trend``, ``seed`` and ``th``.
+
+    Returns:
+        The output of ``_finish``.
+    """
+    subjects = batch_subjects(task["market"], task["years"], task["trend"], task["seed"])
+    net, gross = [], []
+    for s in subjects:
+        sim = s.simulate(s.strat.defaults())
+        e, _ = edge_matrix((sim.net - s.rf)[:, None], sim.bench - s.rf)
+        g, _ = edge_matrix((sim.gross - s.rf)[:, None], sim.bench - s.rf)
+        net.append(float(column_sharpes(e)[0] * math.sqrt(s.dpy)))
+        gross.append(float(column_sharpes(g)[0] * math.sqrt(s.dpy)))
+    subject = subjects[task["member"]]
+    return _finish(task, subject, subject.strat.defaults(), net, gross, True)
+
+
+def _finish(task: dict[str, Any], subject: BarSubject | PanelSubject, params: dict[str, float], selection: list[float],
+            gross: list[float], counted: bool) -> dict[str, Any]:
+    """Run the gauntlet on a calibration subject and record the Deflated Sharpe under every variance method.
+
+    Every stage but significance is the same whatever the method, so one run measures them all: ``dsr_by`` holds
+    the DSR each method gives, and ``summarise`` swaps it in before judging.
+
+    Args:
+        task: The calibration task (``th`` holds the thresholds).
+        subject: The synthetic market.
+        params: Candidate parameters.
+        selection: Annual edge Sharpes the candidate was chosen from (the candidate's own included when
+            ``counted``).
+        gross: Annual edge Sharpes before costs, aligned with ``selection``.
+        counted: Whether the candidate is already in ``selection``.
+
+    Returns:
+        The task plus ``values`` (stage measurements), ``passed`` (per stage), ``admitted``, ``failed_stage``,
+        ``params``, ``dsr_by`` and ``sr0_by`` (the DSR and the annual luck threshold per method in
+        ``STUDY_METHODS``) and compact grid ``records`` for the ledger.
+    """
+    out = evaluate(subject, params, th=task["th"], selection=selection, candidate_counted=counted,
+                   seed=task["seed"])
+    dpy = subject.dpy
+    cand_e = out["candidate_edge_daily"].to_numpy()
+    cand_gross = next(s for s in out["stages"] if s.key == "costs").chart["gross_edge_sharpe"]
+    trial = np.asarray(selection + ([] if counted else [out["values"]["edge"]]), dtype=float)
+    g = np.asarray(gross + ([] if counted else [cand_gross]), dtype=float)
+    ok = np.isfinite(trial)
+    trial, g = trial[ok], g[ok]
+    dsr_by, sr0_by = {}, {}
+    for method in stats.VARIANCE_METHODS:
+        d = deflate(cand_e, trial, dpy, method)
+        dsr_by[method], sr0_by[method] = d["dsr"], d["sr0"] * math.sqrt(dpy)
+    # Study only: the spread of the trials that earned an edge before costs, N unchanged.
+    d = stats.dsr(cand_e, max(len(trial), 1), stats.trial_variance(trial[g > 0] / math.sqrt(dpy)))
+    dsr_by["positive_gross"], sr0_by["positive_gross"] = d["dsr"], d["sr0"] * math.sqrt(dpy)
     keep = ("sharpe", "cagr", "max_dd", "n_obs", "edge_sharpe")
     return {
         **{k: v for k, v in task.items() if k != "th"},
@@ -285,6 +408,8 @@ def _one(task: dict[str, Any]) -> dict[str, Any]:
         "passed": {s.key: s.passed for s in out["stages"]},
         "failed_stage": out["failed_stage"],
         "admitted": out["failed_stage"] is None,
+        "dsr_by": dsr_by,
+        "sr0_by": sr0_by,
         "records": [{**r, "metrics": {k: r["metrics"].get(k) for k in keep}} for r in out["records"]],
     }
 
@@ -311,18 +436,24 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 def summarise(runs: list[dict[str, Any]], th: dict[str, Any]) -> dict[str, Any]:
     """Turn calibration runs into false-positive rates, power, per-stage pass rates and the admission control.
 
-    Runs are re-judged with ``th``, so the same runs can show what other thresholds would do.
+    Runs are re-judged with ``th``, so the same runs can show what other thresholds would do. Runs that carry
+    ``dsr_by`` are judged with the Deflated Sharpe of ``th["dsr_variance"]``, so a variance method can be
+    re-judged too (``STUDY_METHODS``).
 
     Args:
-        runs: Outputs of ``_one``.
+        runs: Outputs of ``_one`` or ``_batch_one``.
         th: Thresholds to judge with.
 
     Returns:
         ``noise`` rows (family, scenario, n, admitted, rate with 95% interval, stage pass rates), ``power`` rows
-        (family, trend, true edge, years, n, admitted, rate, interval, stage pass rates) and ``control`` rows
-        (prior share of real edges, gate precision, random-admission precision, lift).
+        (family, scenario, trend, true edge, years, n, admitted, rate, interval, stage pass rates) and ``control``
+        rows (prior share of real edges, gate precision, random-admission precision, lift).
     """
+    method = th.get("dsr_variance", thresholds.LEGACY["dsr_variance"])
+
     def verdict_of(r: dict[str, Any]) -> dict[str, bool | None]:
+        if method in r.get("dsr_by", {}):
+            return judge({**r["values"], "dsr": r["dsr_by"][method]}, th)
         return judge(r["values"], th)
 
     def group(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -342,8 +473,8 @@ def summarise(runs: list[dict[str, Any]], th: dict[str, Any]) -> dict[str, Any]:
         if scenario.startswith("noise"):
             noise.append({"family": family, "scenario": scenario, "years": years, **g})
         else:
-            power.append({"family": family, "trend": trend, "true_edge": rows[0].get("true_edge"), "years": years,
-                          **g})
+            power.append({"family": family, "scenario": scenario, "trend": trend, "true_edge": rows[0].get("true_edge"),
+                          "years": years, **g})
 
     noise_runs = [r for r in runs if r["scenario"].startswith("noise")]
     fpr = sum(all(v is not False for v in verdict_of(r).values()) for r in noise_runs) / max(len(noise_runs), 1)
@@ -406,22 +537,12 @@ def run_calibration(
     sizes: dict[float, float] = {}
     truth: dict[tuple[str, float], float] = {}
     if power_reps:
-        for target in edges:
-            lo, hi = 0.0, 1.0
-            for _ in range(10):
-                mid = (lo + hi) / 2
-                lo, hi = (mid, hi) if true_edge("trend_sma", mid) < target else (lo, mid)
-            sizes[target] = round((lo + hi) / 2, 4)
+        sizes = trend_sizes("trend_sma", edges, 10)
         truth = {(f, t): true_edge(f, sizes[t]) for f in POWER_FAMILIES for t in edges}
         log(f"planted trend sizes {sizes}; true edges {({f'{k[0]}@{k[1]}': round(v, 2) for k, v in truth.items()})}")
     p_sizes: dict[float, float] = {}
     if portfolio_reps:
-        for target in edges:
-            lo, hi = 0.0, 1.0
-            for _ in range(8):
-                mid = (lo + hi) / 2
-                lo, hi = (mid, hi) if true_edge("portfolio/tsmom", mid) < target else (lo, mid)
-            p_sizes[target] = round((lo + hi) / 2, 4)
+        p_sizes = trend_sizes("portfolio/tsmom", edges, 8)
         truth.update({(f, t): true_edge(f, p_sizes[t]) for f in PORTFOLIO_POWER for t in edges})
         log(f"portfolio trend sizes {p_sizes}")
 
@@ -523,6 +644,217 @@ def run_calibration(
     audit.log("gauntlet.calibrate", target=run_id, actor=actor,
               details={"fpr": report["fpr_overall"], "runs": len(runs), "trials": len(trials)})
     return clean(report)
+
+
+STUDY_REPS = {
+    "single_tuned": 100,     # noise runs per single-instrument family, best of the grid
+    "single_batch": 100,     # noise markets with the five single-instrument rules as one batch
+    "single_power": 40,      # planted-trend runs per edge, tuned and in a batch
+    "portfolio_tuned": 40,   # noise runs per portfolio family, best of the grid
+    "portfolio_batch": 40,   # noise panels with the three portfolio timing rules as one batch
+    "portfolio_power": 20,   # planted-trend panels per edge, tuned and in a batch
+    "xs_tuned": 40,          # noise runs per crypto family and universe size, best of the grid
+    "xs30_batch": 100,       # top-30 noise cross-sections with the four crypto rules as one batch
+    "xs100_batch": 40,       # top-100 noise cross-sections with the four crypto rules as one batch
+    "xs_power": 30,          # planted-momentum top-30 cross-sections per edge, tuned and in a batch
+}
+
+
+def variance_tasks(reps: dict[str, int], th: dict[str, Any], base_seed: int, sizes: dict[str, dict[float, float]],
+                   truth: dict[tuple[str, float], float]) -> list[dict[str, Any]]:
+    """Calibration tasks of the variance study, one per gauntlet run, each on its own market seed.
+
+    Batch members share their market's seed; every other run has its own.
+
+    Args:
+        reps: Counts by ``STUDY_REPS`` key.
+        th: Thresholds for every run.
+        base_seed: First market seed; markets use ``base_seed + 1`` onwards.
+        sizes: Planted sizes by power family (``trend_sma``, ``portfolio/tsmom``, ``xs30/xs_weekly_momentum``) and
+            target edge.
+        truth: True edge by ``(family, target edge)``.
+
+    Returns:
+        Tasks for ``_one`` (``noise_tuned``, ``power_tuned``) and ``_batch_one`` (``noise_batch``, ``power_batch``).
+    """
+    tasks: list[dict[str, Any]] = []
+    seed = base_seed
+
+    def batch(market: str, years: float, n: int, power: str | None) -> None:
+        nonlocal seed
+        if n == 0:
+            return
+        members = BATCHES[market]
+        for target in sizes[power] if power else [None]:
+            for _ in range(n):
+                seed += 1
+                for i, fam in enumerate(members):
+                    if power and fam != power:
+                        continue
+                    tasks.append({"scenario": "power_batch" if power else "noise_batch", "market": market,
+                                  "member": i, "family": fam, "years": years,
+                                  "trend": sizes[power][target] if power else 0.0, "seed": seed, "th": th,
+                                  **({"target": target, "true_edge": truth[(power, target)]} if power else {})})
+
+    def tuned(family: str, years: float, n: int, power: bool) -> None:
+        nonlocal seed
+        if n == 0:
+            return
+        for target in sizes[family] if power else [None]:
+            for _ in range(n):
+                seed += 1
+                tasks.append({"scenario": "power_tuned" if power else "noise_tuned", "family": family,
+                              "years": years, "trend": sizes[family][target] if power else 0.0, "seed": seed,
+                              "th": th, **({"target": target, "true_edge": truth[(family, target)]} if power else {})})
+
+    for fam in NOISE_FAMILIES:
+        tuned(fam, 20, reps["single_tuned"], False)
+    batch("single", 20, reps["single_batch"], None)
+    tuned("trend_sma", 20, reps["single_power"], True)
+    batch("single", 20, reps["single_power"], "trend_sma")
+    for fam in PORTFOLIO_NOISE:
+        tuned(fam, PORTFOLIO_YEARS, reps["portfolio_tuned"], False)
+    batch("portfolio", PORTFOLIO_YEARS, reps["portfolio_batch"], None)
+    tuned("portfolio/tsmom", PORTFOLIO_YEARS, reps["portfolio_power"], True)
+    batch("portfolio", PORTFOLIO_YEARS, reps["portfolio_power"], "portfolio/tsmom")
+    for top in XS_COINS:
+        for key in XS_STRATEGIES:
+            tuned(f"xs{top}/{key}", XS_YEARS, reps["xs_tuned"], False)
+    batch("xs30", XS_YEARS, reps["xs30_batch"], None)
+    batch("xs100", XS_YEARS, reps["xs100_batch"], None)
+    tuned("xs30/xs_weekly_momentum", XS_YEARS, reps["xs_power"], True)
+    batch("xs30", XS_YEARS, reps["xs_power"], "xs30/xs_weekly_momentum")
+    return tasks
+
+
+def run_variance_study(
+    reps: dict[str, int] | None = None,
+    edges: tuple[float, ...] = (0.5, 1.0),
+    workers: int | None = None,
+    log: Callable[[str], None] = print,
+    actor: str = "user",
+    base_seed: int = 210_000,
+) -> dict[str, Any]:
+    """Measure how each way of estimating the Deflated Sharpe's cross-trial variance trades false positives for power.
+
+    The Deflated Sharpe compares a candidate with the best Sharpe luck would reach among N trials, which grows
+    with the spread of the trials' Sharpes. The study runs the unchanged gauntlet where that spread matters:
+
+    - **Best of the grid** (``noise_tuned``, ``power_tuned``): a researcher kept the in-sample best of up to 300
+      settings, every family as in the main calibration.
+    - **Pre-registered batches** (``noise_batch``, ``power_batch``): every rule of a market type runs its defaults
+      on the same market, and each is deflated against the whole batch, as ``pipeline.judge_batch`` does. The
+      crypto batch mixes weekly rules with daily reversal, whose costs alone sink its edge.
+
+    Each run records the DSR under every method in ``STUDY_METHODS``. Every other stage is unaffected, so the
+    methods are compared on identical runs. Grids are recorded in the ledger under ``calib:`` questions.
+
+    Args:
+        reps: Counts by ``STUDY_REPS`` key; missing keys take their default and 0 skips a part.
+        edges: Target true edge Sharpes for the planted markets.
+        workers: Worker processes; None uses all cores but one.
+        log: Progress callback.
+        actor: Who ran it, for the audit log.
+        base_seed: Market seeds start at ``base_seed + 1``. Confirm a choice on a different one.
+
+    Returns:
+        The report: ``id``, ``kind`` (``dsr_variance``), ``created_at``, ``thresholds_version``, ``thresholds``,
+        ``settings``, ``by_method`` (``summarise`` under each method), ``sr0`` (median luck thresholds),
+        ``noise``, ``power``, ``control`` and ``fpr_overall`` under the method in force, ``headline``, ``runs`` and
+        ``elapsed_s``.
+    """
+    started = time.perf_counter()
+    code = code_version()
+    version, th = thresholds.current()
+    run_id = uuid.uuid4().hex[:8]
+    reps = {**STUDY_REPS, **(reps or {})}
+    n_workers = workers or max(1, (os.cpu_count() or 2) - 1)
+    runs: list[dict[str, Any]] = []
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        sizes: dict[str, dict[float, float]] = {}
+        truth: dict[tuple[str, float], float] = {}
+        if reps["single_power"]:
+            sizes["trend_sma"] = trend_sizes("trend_sma", edges, 10)
+            truth.update({("trend_sma", t): true_edge("trend_sma", x) for t, x in sizes["trend_sma"].items()})
+        if reps["portfolio_power"]:
+            sizes["portfolio/tsmom"] = trend_sizes("portfolio/tsmom", edges, 8)
+            truth.update({("portfolio/tsmom", t): true_edge("portfolio/tsmom", x)
+                          for t, x in sizes["portfolio/tsmom"].items()})
+        if reps["xs_power"]:
+            fam = "xs30/xs_weekly_momentum"
+            sizes[fam] = xs_sizes(fam, edges, pool)
+            got = xs_true_edges([(fam, x) for x in sizes[fam].values()], pool)
+            truth.update({(fam, t): got[(fam, x)] for t, x in sizes[fam].items()})
+        log(f"planted sizes {sizes}; true edges {({f'{k[0]}@{k[1]}': round(v, 2) for k, v in truth.items()})}")
+        tasks = variance_tasks(reps, th, base_seed, sizes, truth)
+        log(f"{len(tasks)} gauntlet runs on {n_workers} processes")
+        futures = [pool.submit(_batch_one if t["scenario"].endswith("batch") else _one, t) for t in tasks]
+        for i, fut in enumerate(as_completed(futures), 1):
+            runs.append(fut.result())
+            if i % 50 == 0 or i == len(tasks):
+                log(f"  {i}/{len(tasks)} runs done ({time.perf_counter() - started:.0f} s)")
+
+    trials = []
+    for i, r in enumerate(runs):
+        question = f"calib:{run_id}:{r['scenario']}:{r['family']}:{i}"
+        trials.extend({**rec, "question": question, "family": r["family"], "strategy": r["family"],
+                       "symbol": "SYNTH", "source": "calibration"} for rec in r.pop("records"))
+
+    by_method = {m: summarise(runs, {**th, "dsr_variance": m}) for m in STUDY_METHODS}
+    sr0: dict[str, dict[str, list[float]]] = {}
+    for r in runs:
+        for m, v in r["sr0_by"].items():
+            sr0.setdefault(f"{r['scenario']}:{r['family']}", {}).setdefault(m, []).append(v)
+    report = {
+        "id": run_id,
+        "kind": "dsr_variance",
+        "created_at": naive_utc().isoformat(timespec="seconds"),
+        "thresholds_version": version,
+        "thresholds": th,
+        "settings": {"reps": reps, "edges": list(edges), "planted_sizes": {f: {str(k): v for k, v in d.items()}
+                                                                         for f, d in sizes.items()},
+                     "true_edges": {f"{f}@{t}": v for (f, t), v in truth.items()}, "methods": list(STUDY_METHODS),
+                     "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed, "code": code},
+        "by_method": by_method,
+        "sr0": {k: {m: float(np.nanmedian(v)) for m, v in d.items()} for k, d in sr0.items()},
+        **by_method[th["dsr_variance"]],
+        "runs": [{k: r[k] for k in ("scenario", "family", "years", "trend", "seed", "values", "admitted",
+                                    "failed_stage", "dsr_by", "sr0_by")} for r in runs],
+        "elapsed_s": round(time.perf_counter() - started, 1),
+    }
+    report["headline"] = variance_headline(report)
+    path = config.reports_dir() / "calibration" / f"{run_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(clean(report)))  # saved first: the runs survive a ledger write that fails
+    for k in range(0, len(trials), 100_000):
+        ledger.record_trials(trials[k:k + 100_000])
+    audit.log("gauntlet.calibrate", target=run_id, actor=actor,
+              details={"kind": "dsr_variance", "runs": len(runs), "trials": len(trials),
+                       "fpr": {m: s["fpr_overall"] for m, s in by_method.items()}})
+    return clean(report)
+
+
+def variance_headline(report: dict[str, Any]) -> str:
+    """The variance study in one sentence per method: the worst noise family and the power in batches.
+
+    Args:
+        report: A ``run_variance_study`` report.
+
+    Returns:
+        One clause per method, joined by semicolons.
+    """
+    parts = []
+    for m, s in report["by_method"].items():
+        worst = max(s["noise"], key=lambda r: r["rate"]) if s["noise"] else None
+        batch = [p for p in s["power"] if p["scenario"] == "power_batch"]
+        text = f"{m}: noise {s['fpr_overall']:.1%} pooled"
+        if worst:
+            text += f", worst {worst['scenario']} {worst['family']} {worst['rate']:.0%}"
+        if batch:
+            text += ", batch power " + ", ".join(f"{p['family']} edge {p['true_edge']:.2f} {p['rate']:.0%}"
+                                                 for p in sorted(batch, key=lambda p: (p["family"], p["trend"])))
+        parts.append(text)
+    return "; ".join(parts) + "."
 
 
 def headline(report: dict[str, Any]) -> str:

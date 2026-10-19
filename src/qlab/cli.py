@@ -1,5 +1,5 @@
 """Command line entry point: ``qlab serve | init | ingest | backtest | portfolio | gauntlet | portfolio-gauntlet |
-calibrate | bench | demo | paper | report | registry | alerts``.
+calibrate | calibrate-variance | bench | demo | paper | report | registry | alerts``.
 
 More commands arrive with each milestone (inbox, mine).
 """
@@ -275,6 +275,34 @@ def calibrate(
         typer.echo(f"  power  {r['family']:<14} edge {r['true_edge']:.2f}  {r['years']:>4g} y  "
                    f"{r['admitted']:>3}/{r['n']:<4} {r['rate']:6.1%}")
     typer.echo(rep["headline"])
+
+
+@app.command("calibrate-variance")
+def calibrate_variance(
+    seed: int = typer.Option(210_000, help="Base seed; confirm a choice with a different one"),
+    workers: int = typer.Option(0, help="Worker processes; 0 uses all cores but one"),
+    scale: float = typer.Option(1.0, help="Multiply every run count (0.1 for a quick look)"),
+) -> None:
+    """Compare ways of estimating the Deflated Sharpe's cross-trial variance on grids and pre-registered batches.
+
+    Args:
+        seed: Base seed for the simulated markets.
+        workers: Worker processes.
+        scale: Factor on every count in ``calibration.STUDY_REPS``; a part with a count above 0 keeps at least 1.
+    """
+    from .gauntlet.calibration import STUDY_REPS, run_variance_study
+
+    reps = {k: max(1, round(v * scale)) if v else 0 for k, v in STUDY_REPS.items()}
+    rep = run_variance_study(reps, workers=workers or None, log=typer.echo, actor="cli", base_seed=seed)
+    typer.echo(f"\nReport {rep['id']} ({rep['elapsed_s']} s, {rep['settings']['n_trials']:,} trials recorded)")
+    for method, s in rep["by_method"].items():
+        typer.echo(f"\n{method}: noise {s['fpr_overall']:.2%} pooled")
+        for r in sorted(s["noise"], key=lambda r: -r["rate"])[:5]:
+            typer.echo(f"  noise  {r['scenario']:<12} {r['family']:<28} {r['admitted']:>3}/{r['n']:<4} "
+                       f"{r['rate']:6.1%}  [{r['low']:.1%}, {r['high']:.1%}]")
+        for r in s["power"]:
+            typer.echo(f"  power  {r['scenario']:<12} {r['family']:<28} edge {r['true_edge']:.2f}  "
+                       f"{r['admitted']:>3}/{r['n']:<4} {r['rate']:6.1%}")
 
 
 @app.command()

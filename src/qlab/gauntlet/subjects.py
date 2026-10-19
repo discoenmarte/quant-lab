@@ -21,7 +21,7 @@ import pandas as pd
 from ..backtest import runner
 from ..backtest.engine import CostModel, run
 from ..backtest.leakage import future_shift_check
-from ..backtest.strategies import REGISTRY, Param
+from ..backtest.strategies import REGISTRY, Param, Strategy
 from ..data import store
 from ..data.ingest import SOURCES
 from ..portfolio import leakage as panel_leakage
@@ -29,6 +29,7 @@ from ..portfolio.engine import run_portfolio
 from ..portfolio.panel import Panel, cost_model_of, load_panel
 from ..portfolio.runner import check_fit, panel_hash, question_of
 from ..portfolio.strategies import REGISTRY as PORTFOLIOS
+from ..portfolio.strategies import PortfolioStrategy
 from . import stats
 from .nulls import local_vol, permuter
 
@@ -121,7 +122,7 @@ class BarSubject:
     def __init__(
         self,
         bars: pd.DataFrame,
-        strategy: str,
+        strategy: str | Strategy,
         sealed_from: pd.Timestamp,
         *,
         source: str,
@@ -135,7 +136,7 @@ class BarSubject:
 
         Args:
             bars: Full history of normalised bars.
-            strategy: Registry key.
+            strategy: Registry key, or a strategy object (a mined rule compiled by ``qlab.mining``).
             sealed_from: First lockbox date.
             source: Data source (or ``"synthetic"``).
             symbol: Instrument.
@@ -144,9 +145,10 @@ class BarSubject:
             rf: Risk-free return per bar, aligned with ``bars``; None means zero.
             dpy: Days per year.
         """
-        self.strat = REGISTRY[strategy]
+        self.strat = REGISTRY[strategy] if isinstance(strategy, str) else strategy
         self.params: dict[str, Param] = self.strat.params
-        self.family, self.strategy, self.scope, self.interval = self.strat.family, strategy, symbol, interval
+        self.family, self.strategy, self.scope, self.interval = self.strat.family, self.strat.name, symbol, interval
+        self.session = getattr(self.strat, "session", "all")  # mined rules may hold only overnight or by day
         self.question = f"{self.family}:{symbol}:{interval}"
         self.bars, self.model, self.rf_bars, self.dpy, self.sealed = bars, model, rf, dpy, sealed_from
         self.mask = (bars["ts"] < sealed_from).to_numpy()
@@ -161,7 +163,7 @@ class BarSubject:
                                      "costs": model.__dict__}
 
     @classmethod
-    def load(cls, source: str, symbol: str, interval: str, strategy: str, sealed_from: pd.Timestamp,
+    def load(cls, source: str, symbol: str, interval: str, strategy: str | Strategy, sealed_from: pd.Timestamp,
              costs: str | dict[str, float] | CostModel = "auto") -> BarSubject:
         """Load stored bars and build the subject.
 
@@ -169,7 +171,7 @@ class BarSubject:
             source: Data source.
             symbol: Instrument.
             interval: Bar interval.
-            strategy: Registry key.
+            strategy: Registry key or strategy object.
             sealed_from: First lockbox date.
             costs: Cost preset, dict or model.
 
@@ -194,14 +196,18 @@ class BarSubject:
         Returns:
             A ``Sim``.
         """
-        res = run(self.bars, self.strat.positions(self.bars, cfg), self.model, self.rf_bars, with_trades=False)
+        res = run(self.bars, self.strat.positions(self.bars, cfg), self.model, self.rf_bars, with_trades=False,
+                  session=self.session)
         m = self.mask
         pos = res.position.to_numpy()[m]
+        # A session strategy round-trips every day it holds, which position changes don't show; its costs do.
+        traded = (float(res.costs.to_numpy()[m].sum()) / self.model.per_unit if self.session != "all"
+                  and self.model.per_unit > 0 else float(np.abs(np.diff(pos, prepend=0.0)).sum()))
         return Sim(
             net=to_daily(res.returns.to_numpy()[m], self.ts_r).to_numpy(),
             gross=to_daily((res.gross + res.cash).to_numpy()[m], self.ts_r).to_numpy(),
             bench=to_daily(res.benchmark.to_numpy()[m], self.ts_r).to_numpy(),
-            turnover=float(np.abs(np.diff(pos, prepend=0.0)).sum()) / (len(self.days) / self.dpy),
+            turnover=traded / (len(self.days) / self.dpy),
         )
 
     def leak_check(self, cfg: dict[str, float], seed: int) -> dict[str, Any]:
@@ -232,7 +238,7 @@ class BarSubject:
         rf_bars = None if self.rf_bars is None else self.rf_bars[self.mask].reset_index(drop=True)
 
         def stat(b: pd.DataFrame) -> float:
-            res = run(b, self.strat.positions(b, cfg), self.model, rf_bars, with_trades=False)
+            res = run(b, self.strat.positions(b, cfg), self.model, rf_bars, with_trades=False, session=self.session)
             net = to_daily(res.returns.to_numpy(), b["ts"]).to_numpy()
             bench = to_daily(res.benchmark.to_numpy(), b["ts"]).to_numpy()
             return _edge_sharpe_annual(net, bench, self.rf, self.dpy)
@@ -249,7 +255,8 @@ class BarSubject:
         Returns:
             ``net``, ``bench``, ``rf`` (daily arrays), ``start``, ``end`` and ``data_hash``.
         """
-        res = run(self.bars, self.strat.positions(self.bars, cfg), self.model, self.rf_bars, with_trades=False)
+        res = run(self.bars, self.strat.positions(self.bars, cfg), self.model, self.rf_bars, with_trades=False,
+                  session=self.session)
         lock = ~self.mask
         ts_l = self.bars["ts"][lock]
         rf = np.zeros(int(lock.sum())) if self.rf_bars is None else self.rf_bars.to_numpy()[lock]
@@ -271,7 +278,8 @@ class BarSubject:
         Returns:
             Returns indexed by date.
         """
-        res = run(self.bars, self.strat.positions(self.bars, cfg), self.model, self.rf_bars, with_trades=False)
+        res = run(self.bars, self.strat.positions(self.bars, cfg), self.model, self.rf_bars, with_trades=False,
+                  session=self.session)
         return to_daily(res.returns.to_numpy(), self.bars["ts"])
 
 
@@ -283,24 +291,25 @@ class PanelSubject:
 
     kind = "portfolio"
 
-    def __init__(self, panel: Panel, strategy: str, sealed_from: pd.Timestamp, universe: str | None = None) -> None:
+    def __init__(self, panel: Panel, strategy: str | PortfolioStrategy, sealed_from: pd.Timestamp,
+                 universe: str | None = None) -> None:
         """Prepare a subject from a loaded panel.
 
         Args:
             panel: Full-history panel.
-            strategy: Key of the portfolio strategy registry.
+            strategy: Key of the portfolio strategy registry, or a strategy object (a mined rule).
             sealed_from: First lockbox date.
             universe: Universe name; defaults to the panel's.
 
         Raises:
             ValueError: The strategy is built for the other kind of universe (static or dynamic).
         """
-        self.strat = PORTFOLIOS[strategy]
+        self.strat = PORTFOLIOS[strategy] if isinstance(strategy, str) else strategy
         check_fit(self.strat, panel)
         self.params: dict[str, Param] = self.strat.params
         self.panel, self.sealed, self.dpy = panel, sealed_from, panel.dpy
         name = universe or panel.name
-        self.family, self.strategy, self.scope, self.interval = self.strat.family, strategy, name, "1d"
+        self.family, self.strategy, self.scope, self.interval = self.strat.family, self.strat.name, name, "1d"
         self.question = question_of(self.family, name)
         self.mask = np.asarray(panel.ts < sealed_from)
         self.research_panel = panel.slice(self.mask)
@@ -315,12 +324,12 @@ class PanelSubject:
         self.null_note = "null worlds deal each day's moves out again across coins" if panel.dynamic else ""
 
     @classmethod
-    def load(cls, universe: str, strategy: str, sealed_from: pd.Timestamp) -> PanelSubject:
+    def load(cls, universe: str, strategy: str | PortfolioStrategy, sealed_from: pd.Timestamp) -> PanelSubject:
         """Load a named universe and build the subject.
 
         Args:
             universe: Universe name.
-            strategy: Portfolio strategy key.
+            strategy: Portfolio strategy key or strategy object.
             sealed_from: First lockbox date.
 
         Returns:
@@ -605,9 +614,13 @@ def subject_from_meta(meta: dict[str, Any], sealed_from: pd.Timestamp) -> BarSub
         sealed_from: First lockbox date.
 
     Returns:
-        The subject.
+        The subject. A mined strategy (``mined_...``) is rebuilt from its stored spec.
     """
+    strategy: Any = meta["strategy"]
+    if str(strategy).startswith("mined_"):
+        from ..mining.grammar import load_strategy  # mining builds on the gauntlet: import here, one-way layers
+
+        strategy = load_strategy(strategy)
     if meta.get("kind") == "portfolio":
-        return PanelSubject.load(meta["universe"], meta["strategy"], sealed_from)
-    return BarSubject.load(meta["source"], meta["symbol"], meta["interval"], meta["strategy"], sealed_from,
-                           meta["costs"])
+        return PanelSubject.load(meta["universe"], strategy, sealed_from)
+    return BarSubject.load(meta["source"], meta["symbol"], meta["interval"], strategy, sealed_from, meta["costs"])

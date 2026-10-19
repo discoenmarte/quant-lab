@@ -146,6 +146,19 @@ SCHEMA = [
         reason VARCHAR,
         actor VARCHAR
     )""",
+    # M6: every alert raised, with what each channel did with it.
+    """CREATE TABLE IF NOT EXISTS alerts (
+        alert_id VARCHAR PRIMARY KEY,
+        created_at TIMESTAMP,
+        report_id VARCHAR,
+        rule VARCHAR,
+        severity VARCHAR,
+        key VARCHAR,
+        title VARCHAR,
+        message VARCHAR,
+        link VARCHAR,
+        delivery VARCHAR
+    )""",
 ]
 
 

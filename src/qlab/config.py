@@ -67,6 +67,39 @@ def web_dist() -> Path:
     return ROOT / "web" / "dist"
 
 
+def env_file() -> Path:
+    """Optional file of ``NAME=value`` settings, for secrets such as an alert token.
+
+    It lives in the data folder, which git ignores, so a token written there can't be committed. Background jobs
+    (launchd, the API server) read it too, without the token appearing in a plist or a shell profile.
+
+    Returns:
+        ``<data>/lab.env``.
+    """
+    return data_dir() / "lab.env"
+
+
+def setting(name: str, default: str | None = None) -> str | None:
+    """A setting from the environment, or else from ``lab.env``.
+
+    Args:
+        name: Variable name, e.g. ``QLAB_TELEGRAM_TOKEN``.
+        default: Value when neither source has it.
+
+    Returns:
+        The value with surrounding whitespace and quotes removed, or ``default``.
+    """
+    if name in os.environ:
+        return os.environ[name].strip()
+    path = env_file()
+    if path.exists():
+        for line in path.read_text().splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and key.strip().removeprefix("export ").strip() == name:
+                return value.strip().strip("'\"")
+    return default
+
+
 def ensure_dirs() -> None:
     """Create the data, raw, curated and reports folders if they're missing."""
     for d in (data_dir(), raw_dir(), curated_dir(), reports_dir()):

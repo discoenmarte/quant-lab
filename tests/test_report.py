@@ -3,6 +3,7 @@
 job's report step."""
 
 import json
+import math
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -10,34 +11,42 @@ import httpx
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from scipy.stats import norm
 
 from qlab import alerts, config, db, ledger, registry, report
 from qlab.api.main import create_app
 from qlab.data import freshness, store
 from qlab.data.bars import normalize_bars
 from qlab.data.ingest import SourceInfo
-from qlab.gauntlet import pipeline
+from qlab.gauntlet import pipeline, stats
 
 
-def stages(failed: tuple[str, ...] = ()) -> list[dict]:
-    """Stage rows as a card stores them: every stage passes except ``failed``; bootstrap and lockbox can't reject."""
+def stages(failed: tuple[str, ...] = (), p: float = 0.03, sr: float = 0.05) -> list[dict]:
+    """Stage rows as a card stores them: every stage passes except ``failed``; bootstrap and lockbox can't reject.
+
+    ``p`` is the permutation p-value and ``sr`` the daily edge Sharpe on the significance chart (2,000 research days,
+    normal and uncorrelated: the default's undeflated PSR is 0.99, ``sr=0.01`` gives 0.67).
+    """
     out = []
     for key, name in pipeline.STAGES:
         passed = None if key in ("bootstrap", "lockbox") else key not in failed
-        value = {"costs": 0.4, "permutation": 0.03, "significance": 0.8}.get(key)
-        out.append({"key": key, "name": name, "passed": passed, "value": value, "threshold": "", "summary": ""})
+        value = {"costs": 0.4, "permutation": p, "significance": 0.8}.get(key)
+        chart = {"sr": sr, "n": 2000, "skew": 0.0, "kurt": 3.0, "rho": 0.0} if key == "significance" else None
+        out.append({"key": key, "name": name, "passed": passed, "value": value, "threshold": "", "summary": "",
+                    "chart": chart})
     return out
 
 
 def save_card(card_id: str, verdict: str = "rejected", failed: tuple[str, ...] = (),
-              question: str | None = None, created: str = "2026-10-18T10:00:00") -> None:
-    """Write a minimal report card to the catalog."""
+              question: str | None = None, created: str = "2026-10-18T10:00:00", p: float = 0.03,
+              sr: float = 0.05) -> None:
+    """Write a minimal report card to the catalog (``p`` and ``sr`` as in ``stages``)."""
     question = question or f"rule_{card_id}:test_universe:1d"
     pipeline._save_card({
         "card_id": card_id, "created_at": created, "verdict": verdict, "failed_stage": failed[0] if failed else None,
         "meta": {"question": question, "family": question.split(":")[0], "strategy": question.split(":")[0],
                  "params": {}, "symbol": "test_universe", "lockbox_from": "2024-10-01"},
-        "thresholds": {"version": 2}, "stages": stages(failed),
+        "thresholds": {"version": 2}, "stages": stages(failed, p, sr),
     })
 
 
@@ -70,25 +79,43 @@ def sources(monkeypatch):
 # Registry
 
 
-def test_near_miss_is_a_rejection_only_at_the_luck_stages():
-    """Failing only permutation or significance (or both) is a near-miss; any other failure, or none, is not."""
-    assert registry.is_near_miss("rejected", stages(("significance",)))
-    assert registry.is_near_miss("rejected", stages(("permutation", "significance")))
-    assert not registry.is_near_miss("rejected", stages(("walk_forward", "permutation")))
-    assert not registry.is_near_miss("rejected", stages(("lockbox",)))
-    assert not registry.is_near_miss("candidate", stages())
-    assert not registry.is_near_miss("rejected", stages())
+def test_near_miss_is_a_rejection_only_at_the_luck_stages_and_close_to_their_bar():
+    """Failing only permutation or significance (or both), with p <= 0.10 and an undeflated PSR >= 0.80, is a
+    near-miss; any other failure, none, or a miss beyond either cap is not."""
+    ok = 0.9
+    assert registry.is_near_miss("rejected", stages(("significance",)), ok)
+    assert registry.is_near_miss("rejected", stages(("permutation", "significance")), ok)
+    assert not registry.is_near_miss("rejected", stages(("walk_forward", "permutation")), ok)
+    assert not registry.is_near_miss("rejected", stages(("lockbox",)), ok)
+    assert not registry.is_near_miss("candidate", stages(), ok)
+    assert not registry.is_near_miss("rejected", stages(), ok)
+    assert registry.is_near_miss("rejected", stages(("permutation",), p=0.10), 0.80)  # both caps are inclusive
+    assert not registry.is_near_miss("rejected", stages(("permutation", "significance"), p=0.293), ok)
+    assert not registry.is_near_miss("rejected", stages(("significance",), p=0.012), 0.79)
+    assert not registry.is_near_miss("rejected", stages(("significance",)), float("nan"))
+
+
+def test_undeflated_psr_comes_from_the_significance_chart():
+    """PSR with N = 1 against a Sharpe of zero, autocorrelation-adjusted; NaN when the chart is missing."""
+    chart = {"sr": 0.02, "n": 2056, "skew": -0.3, "kurt": 6.0, "rho": 0.1}
+    psr = registry.undeflated_psr(chart)
+    assert psr == pytest.approx(stats.psr(0.02, 0.0, 2056, -0.3, 6.0, 0.1))
+    assert psr < registry.undeflated_psr({**chart, "rho": 0.0})  # autocorrelated returns are less certain
+    assert registry.undeflated_psr({**chart, "rho": 0.0, "skew": 0.0, "kurt": 3.0}) == pytest.approx(
+        norm.cdf(0.02 * 2056**0.5))
+    assert math.isnan(registry.undeflated_psr(None)) and math.isnan(registry.undeflated_psr({"sr": 0.02}))
 
 
 def test_state_precedence():
     """An active paper entry wins, then a retirement, then the verdict; the near-miss rule applies to rejections."""
     luck = stages(("permutation",))
-    assert registry.state_of("rejected", luck, in_book=True, retired=True) == "in_paper_book"
-    assert registry.state_of("validated", stages(), in_book=False, retired=True) == "retired"
-    assert registry.state_of("validated", stages(), in_book=False, retired=False) == "validated"
-    assert registry.state_of("candidate", stages(), in_book=False, retired=False) == "candidate"
-    assert registry.state_of("rejected", luck, in_book=False, retired=False) == "near_miss"
-    assert registry.state_of("rejected", stages(("costs",)), in_book=False, retired=False) == "rejected"
+    assert registry.state_of("rejected", luck, in_book=True, retired=True, psr=0.9) == "in_paper_book"
+    assert registry.state_of("validated", stages(), in_book=False, retired=True, psr=0.9) == "retired"
+    assert registry.state_of("validated", stages(), in_book=False, retired=False, psr=0.9) == "validated"
+    assert registry.state_of("candidate", stages(), in_book=False, retired=False, psr=0.9) == "candidate"
+    assert registry.state_of("rejected", luck, in_book=False, retired=False, psr=0.9) == "near_miss"
+    assert registry.state_of("rejected", luck, in_book=False, retired=False, psr=0.5) == "rejected"
+    assert registry.state_of("rejected", stages(("costs",)), in_book=False, retired=False, psr=0.9) == "rejected"
 
 
 def test_registry_derives_states_from_cards_the_book_and_retirements():
@@ -98,6 +125,8 @@ def test_registry_derives_states_from_cards_the_book_and_retirements():
     save_card("c_book", "rejected", ("permutation", "significance"))
     save_card("c_gone", "rejected", ("costs",))
     save_card("c_old", "rejected", ("walk_forward",))
+    save_card("c_far", "rejected", ("permutation", "significance"), p=0.293)
+    save_card("c_weak", "rejected", ("significance",), sr=0.01)
     add_entry("e_book", "c_book")
     add_entry("e_gone", "c_gone", status="retired")
     by = {c["card_id"]: c for c in registry.cards()}
@@ -107,8 +136,11 @@ def test_registry_derives_states_from_cards_the_book_and_retirements():
     assert by["c_gone"]["state"] == "retired" and by["c_gone"]["since"].startswith("2026-10-10")
     assert by["c_old"]["state"] == "rejected" and by["c_old"]["failed"] == ["walk_forward"]
     assert by["c_near"]["edge"] == 0.4 and by["c_near"]["perm_p"] == 0.03
+    assert by["c_near"]["psr"] == pytest.approx(norm.cdf(0.05 * 2000**0.5)) and by["c_old"]["psr"] is None
+    assert by["c_far"]["state"] == "rejected" and not by["c_far"]["near_miss"] and by["c_far"]["psr"] > 0.8
+    assert by["c_weak"]["state"] == "rejected" and by["c_weak"]["psr"] == pytest.approx(0.67, abs=0.01)
     assert registry.counts(list(by.values())) == {"candidate": 1, "validated": 0, "in_paper_book": 1, "near_miss": 1,
-                                                  "rejected": 1, "retired": 1}
+                                                  "rejected": 3, "retired": 1}
 
 
 def test_retiring_needs_a_reason_and_stops_the_paper_entry(pair_entry):
@@ -314,7 +346,7 @@ def test_report_covers_the_time_since_the_previous_one_and_adds_no_trial(sources
     assert first["trials"]["by_question"][0] == {"question": "trend:X:1d", "source": "gauntlet", "n": 5,
                                                  "best_edge_sharpe": 0.3, "n_total": 5}
     assert [c["card_id"] for c in first["verdicts"]] == ["c_near"]
-    assert any("near-miss" in h["text"] for h in first["headline"] if h["topic"] == "verdicts")
+    assert any("near-miss: p 0.030, PSR 0.99" in h["text"] for h in first["headline"] if h["topic"] == "verdicts")
 
     record("trend:X:1d", n=2)
     second = report.build()

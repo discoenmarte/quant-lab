@@ -18,6 +18,7 @@ Design (decision 0010):
 
 from __future__ import annotations
 
+import calendar
 import json
 import re
 import uuid
@@ -117,21 +118,30 @@ a static universe, a "dynamic" rule a dynamic one):
 - rationale: the economic reason the paper gives, or "none stated"."""
 
 
-def _date(x: Any) -> str | None:
+def _date(x: Any, end: bool = False) -> str | None:
     """A claimed sample date normalised to ``YYYY-MM-DD``.
 
     Args:
         x: ``YYYY``, ``YYYY-MM``, ``YYYY-MM-DD`` or None.
+        end: The date ends a sample, so a year or month means its last day (a sample "to 2023" includes December).
 
     Returns:
-        The date (the first day of the year or month), or None.
+        The date (the first day of the year or month, or the last one when ``end``), or None.
     """
     if x in (None, ""):
         return None
     m = re.match(r"^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?", str(x))
     if not m:
         return None
-    return f"{m.group(1)}-{m.group(2) or '01'}-{m.group(3) or '01'}"
+    year, month, day = m.group(1), m.group(2), m.group(3)
+    if day:
+        return f"{year}-{month}-{day}"
+    if not end:
+        return f"{year}-{month or '01'}-01"
+    if not month:
+        return f"{year}-12-31"
+    last = calendar.monthrange(int(year), int(month))[1]
+    return f"{year}-{month}-{last:02d}"
 
 
 def validate(data: dict[str, Any]) -> dict[str, Any]:
@@ -196,7 +206,7 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
     if data["costs_included"] is not None and not isinstance(data["costs_included"], bool):
         raise ValueError("costs_included must be true, false or null")
     return {**{k: data[k] for k in SCHEMA["required"]}, "params": params,
-            "sample_start": _date(data["sample_start"]), "sample_end": _date(data["sample_end"]),
+            "sample_start": _date(data["sample_start"]), "sample_end": _date(data["sample_end"], end=True),
             "signal": str(data["signal"])[:600], "rebalance": str(data["rebalance"])[:200],
             "differences": str(data["differences"])[:800], "rationale": str(data["rationale"])[:600],
             "notes": notes}
@@ -354,7 +364,7 @@ def review(spec_id: str, decision: str, reason: str, edits: dict[str, Any] | Non
     spec = s["spec"]
     if edits:
         keep = {k: v for k, v in spec.items() if k in SCHEMA["required"]}
-        spec = {**validate({**keep, **edits}), "published": spec.get("published")}
+        spec = {**validate({**keep, **edits}), "published": spec.get("published"), "read": spec.get("read")}
         if "fit" not in edits and spec["fit"] == "none":
             spec["fit"] = "approximate"
     if decision == "approve" and spec["fit"] == "none":

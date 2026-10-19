@@ -166,7 +166,9 @@ def test_specs_only_name_templates_targets_and_parameters_the_lab_has():
     v = spec.validate(SPEC)
     assert v["params"]["window"] in {225.0, 230.0, 220.0} or 50 <= v["params"]["window"] <= 300
     assert "bogus" not in v["params"] and any("bogus" in n for n in v["notes"])
-    assert v["sample_start"] == "2000-01-01" and v["sample_end"] == "2010-06-01"
+    assert v["sample_start"] == "2000-01-01" and v["sample_end"] == "2010-06-30"
+    assert spec.validate({**SPEC, "sample_end": "2023"})["sample_end"] == "2023-12-31"
+    assert spec.validate({**SPEC, "sample_end": "2024-02"})["sample_end"] == "2024-02-29"
     with pytest.raises(ValueError, match="unknown bars template"):
         spec.validate({**SPEC, "template": "rm -rf"})
     with pytest.raises(ValueError, match="unknown instrument"):
@@ -270,7 +272,7 @@ def test_replication_compares_with_the_claim_and_tests_after_publication():
     spec.review(s["spec_id"], "approve", "classic rule")
     r = replicate.replicate(s["spec_id"])
     res = r["results"]
-    assert res["in_sample"]["start"] >= "2000-01-03" and res["in_sample"]["end"] <= "2010-06-01"
+    assert res["in_sample"]["start"] >= "2000-01-03" and res["in_sample"]["end"] <= "2010-06-30"
     assert res["verdict"] in ("replicated", "not_replicated") and r["status"] == res["verdict"]
     assert "after the research period" in res["post_publication"]["reason"]
     assert ledger.count_trials("trend_sma:SPY:1d") == 1

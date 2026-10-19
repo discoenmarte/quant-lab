@@ -351,3 +351,25 @@ def test_raw_prices_not_adjusted_ones_size_the_orders(entry):
     _, day = entry
     bar = execution.raw_bar("yahoo", "AAA", pd.Timestamp(day))
     assert bar == pytest.approx((FRAMES["AAA"]["open"].iloc[N_DAYS - 1], FRAMES["AAA"]["close"].iloc[N_DAYS - 1]))
+
+
+def test_tests_never_see_the_developers_broker_keys():
+    """The repository's .env is out of reach in tests, so no test can call a real paper account."""
+    from qlab.broker.alpaca import AlpacaPaper
+
+    assert not AlpacaPaper().configured()
+
+
+def test_the_broker_api_reports_status_and_kills_without_a_form():
+    """Status sends nothing; the kill needs no confirmation; resuming does."""
+    from fastapi.testclient import TestClient
+
+    from qlab.api.main import create_app
+
+    client = TestClient(create_app())
+    st = client.get("/api/broker/status").json()
+    assert st["controls"]["mode"] == "active" and st["brokers"]["alpaca"]["configured"] is False
+    assert client.post("/api/broker/kill", json={}).json()["state"]["mode"] == "killed"
+    assert client.post("/api/broker/resume", json={"reason": "ok", "confirm": "yes"}).status_code == 400
+    res = client.post("/api/broker/resume", json={"reason": "tested the switch", "confirm": "RESUME"})
+    assert res.status_code == 200 and client.get("/api/broker/status").json()["controls"]["pending"]

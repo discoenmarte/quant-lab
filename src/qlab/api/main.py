@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__, config
 from . import (
     routes_backtest,
+    routes_broker,
     routes_core,
     routes_data,
     routes_gauntlet,
@@ -22,7 +23,7 @@ from . import (
 
 ROUTERS = [routes_core.router, routes_data.router, routes_backtest.router, routes_gauntlet.router,
            routes_ledger.router, routes_portfolio.router, routes_paper.router, routes_registry.router,
-           routes_report.router]
+           routes_report.router, routes_broker.router]
 
 
 def create_app() -> FastAPI:

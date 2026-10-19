@@ -250,4 +250,30 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "long": "Positive means the fill was worse than the model. The cost model charges half the spread plus "
         "slippage (2 bps for ETFs); the fills show whether that was right.",
     },
+    "rubric": {
+        "term": "Seven-point rubric",
+        "short": "Seven yes-or-no checks a local model makes on each paper's abstract; the score sorts the inbox.",
+        "long": "Runs on the lab's data, precise enough to code, out-of-sample evidence, costs, an economic reason, "
+        "ten years or many instruments, and whether it says how many variants were tried. The score is recomputed "
+        "from the dots. It sorts the Research Inbox; it isn't evidence.",
+    },
+    "strategy_spec": {
+        "term": "Strategy spec",
+        "short": "A paper mapped onto one of the lab's existing strategy templates, with what the paper claims.",
+        "long": "The model drafts it and the owner approves or rejects it, with a reason. Nothing the model writes is "
+        "run: a paper no template fits is marked 'needs code', and a new template is written and tested by hand.",
+    },
+    "replication": {
+        "term": "Replication",
+        "short": "The paper's rule run on the lab's data over the paper's sample, with its Sharpe ratio compared to the "
+        "claim.",
+        "long": "It counts as replicated when it lands within the larger of 0.3 and two standard errors of a Sharpe "
+        "estimate over the run's length. A match proves the code, not the edge: published results shrink.",
+    },
+    "post_publication": {
+        "term": "Post-publication test",
+        "short": "The same rule run from the paper's publication date to the end of the research period.",
+        "long": "McLean & Pontiff (2016) found anomaly returns fall by about half after publication. A paper "
+        "published after the lockbox date has no such data, so its forward evidence comes from the paper book.",
+    },
 }

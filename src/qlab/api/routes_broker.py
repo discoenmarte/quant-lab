@@ -104,6 +104,16 @@ def status() -> dict[str, Any]:
     return execution.status()
 
 
+@router.get("/controls")
+def get_controls() -> dict[str, Any]:
+    """The trading mode, pauses and pending changes, without calling any broker (the top bar polls it).
+
+    Returns:
+        See ``broker.controls.state``, plus ``sleeves`` (how many are active).
+    """
+    return {**controls.state(), "sleeves": len(execution.sleeves("active"))}
+
+
 @router.post("/enroll")
 def enroll(req: Enroll) -> dict[str, Any]:
     """Give a paper-book entry a sleeve.

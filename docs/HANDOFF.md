@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c and M6
+- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6 and the Deflated Sharpe variance fix (thresholds v3)
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -58,7 +58,8 @@ src/qlab/portfolio/       panel (static universes; dynamic ones with an availabi
                           strategies (incl. the cross-sectional crypto rules xs_*), leakage, runner, synthetic
 src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, bootstrap), thresholds,
                           subjects (bars or panel; day shuffles and the cross-sectional null for dynamic panels),
-                          pipeline (ten stages, cards, lockbox), calibration (incl. synthetic crypto cross-sections)
+                          pipeline (ten stages, cards, lockbox), calibration (incl. synthetic crypto cross-sections
+                          and the Deflated Sharpe variance study)
 src/qlab/paper/           forward paper book: sessions (bar open/close times), book (add, decide, retire), score
                           (replay through the engines), monitor (bands, CUSUM alarm), nightly (job + daily report,
                           launchd)
@@ -130,7 +131,9 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 - **Lockbox:** fixed at 2024-10-01. Spent per question when any trial covers a sealed date. Already spent:
   `trend_sma:SPY:1d`, `trend_sma:TLT:1d`, `tsmom:BTCUSDT:1d` (M2 Studio runs).
 - **Thresholds:** v1 = calibrated defaults (PBO reported, walk-forward needs a positive OOS edge, permutation
-  p ≤ 0.05); **v2 (in force)** = permutation p ≤ 0.02 after study B showed trend rules at 7% false positives.
+  p ≤ 0.05); v2 = permutation p ≤ 0.02 after study B showed trend rules at 7% false positives; **v3 (in force)** =
+  the Deflated Sharpe's spread of trial Sharpes capped at what luck can produce (`dsr_variance: luck_max`, studies
+  F and G, decision 0004 addendum).
 - **Calibration** (`qlab calibrate --seed N`, ~8 min on 12 cores, ~375k trials per study, all under `calib:`
   questions): study C on fresh seeds passes noise 1.4% (worst family 3%) and catches edge 1.0 / 0.5 95% / 52% of
   the time with 20 years. Full table in decision 0004.
@@ -234,7 +237,8 @@ universe.
 
 **Follow-ups worth doing:**
 
-1. Estimate the Deflated Sharpe's cross-trial variance robustly, decided on calibration evidence.
+1. ~~Estimate the Deflated Sharpe's cross-trial variance robustly~~: done, thresholds v3 (see "The Deflated
+   Sharpe's spread of trial Sharpes" below).
 2. Decide whether the absolute-return gates (net CAGR > 0, regimes) fit long-only crypto (decision 0006, open
    question).
 3. Put the low-volatility near-miss in the forward paper book. Crypto decisions are late with the daily archive
@@ -330,6 +334,39 @@ forward days):
 4. Something outside the lab that notices a nightly run that never happened.
 5. The top bar overflows at phone width on every page (pre-existing).
 
+### The Deflated Sharpe's spread of trial Sharpes (done; decision 0004 addendum, thresholds v3)
+
+**Problem.** In batch `23275b56` the daily reversal rules' cost-driven edges (−4.0, −4.8) inflated the variance V of
+the trials' Sharpes, so the luck threshold reached 2.25-2.51 and every card showed DSR 0.000.
+
+**Fix.** `stats.trial_variance` offers `sample`, `upper_half`, `mad`, `luck_bound` and `luck_max`; the threshold key
+`dsr_variance` picks one. `luck_max` caps V at `L · N / (N − 1)`, where L is the sampling variance of one Sharpe with
+no edge. That is the widest spread luck can produce at any correlation between trials. When trials cover different
+periods, L averages each trial's own (spans come from the ledger). Versions saved before the key existed keep
+`sample` (`thresholds.LEGACY`). The card's significance summary says when the spread was capped.
+
+**Evidence.** `qlab calibrate-variance --seed N` (~2.2-2.5 hours on 14 processes, 580,500 trials) runs best-of-grid
+and pre-registered-batch scenarios, every rule of a market type on one market, and records the DSR under every method
+on identical runs:
+
+- **Study F** (`5307ae50`, seeds 210,001+) chose a luck bound. The robust spreads (upper half, MAD) and dropping
+  trials with a negative edge before costs still let a real edge inflate V.
+- **Study G** (`0a00a0d2`, seeds 250,001+) confirmed `luck_max`:
+  - it admitted the same noise runs as `sample` (pooled 0.33%, no family above 2.5%)
+  - mean batch power 49% against 20%
+  - best-of-grid power 81% against 68%
+  - planted crypto momentum at 0.98 inside a batch: 60-83% against 0%
+
+**Thresholds v3** were created on the real lab on 2026-10-19 (audit `gauntlet.thresholds`, actor `claude`). No card was
+re-judged. Batch `23275b56` would have had a luck threshold of about 0.5, and still no verdict would change.
+
+**Follow-ups:**
+
+1. New cards can now pass significance where v2 cards couldn't, which feeds the near-miss rule (decision 0008 §2).
+   Read near-misses with the card's thresholds version.
+2. If the paper inbox or mining (M4, M5) mixes trials of different lengths on one scope, check that each trial's
+   span reaches `evaluate` (`selection_days`). `judge_subject` and `judge_batch` already pass it.
+
 ### M1: data lake (done; kept for reference)
 
 Free sources (all reachable from the owner's network on 2026-10-17):
@@ -408,7 +445,7 @@ holds at mining scale.
   spends that question's lockbox. Use research-period runs (the default) for development.
 - `n_perm` and `perm_max_p` are linked: with n shuffles the smallest p-value is 1/(n+1). Threshold updates
   that make the permutation stage impossible are refused.
-- Calibration grows `data/lab.duckdb` by about 60 MB per full study.
+- Calibration grows `data/lab.duckdb` by about 60 MB per full study, and the variance study by about 110 MB.
 - For UI work against a copy of the lab, `.claude/launch.json` has a `lab-scratch` entry that sets `QLAB_DATA`.
 - Paper book: a missed nightly run can't be made up (backfills are refused). If the job ran on stale data it says
   "stale data: ingest first"; ingest and run again before the next session closes. Holidays aren't modelled, so a

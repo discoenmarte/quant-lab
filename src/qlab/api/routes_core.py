@@ -25,7 +25,7 @@ MILESTONES = [
     {"id": "M3", "name": "Validation gauntlet", "status": "done"},
     {"id": "M3b", "name": "Portfolio lab", "status": "done"},
     {"id": "M3c", "name": "Crypto cross-section", "status": "done"},
-    {"id": "M4", "name": "Research inbox", "status": "planned"},
+    {"id": "M4", "name": "Research inbox", "status": "done"},
     {"id": "M5", "name": "Strategy mining", "status": "planned"},
     {"id": "M6", "name": "Registry, report, alerts", "status": "done"},
     {"id": "M7a", "name": "Forward paper book", "status": "done"},

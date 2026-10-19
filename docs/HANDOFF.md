@@ -4,7 +4,7 @@ How to pick this project up and keep building it. Read this, then `README.md`, `
 `docs/STYLE.md`.
 
 - **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6, the Deflated Sharpe variance fix (thresholds v3), M7b,
-  the regimes stage on the edge (thresholds v4) and the near-miss caps
+  the regimes stage on the edge (thresholds v4), the near-miss caps and M4 (research inbox)
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -41,7 +41,8 @@ src/qlab/config.py        paths (QLAB_DATA overrides the data folder; tests use 
                           environment, then <data>/lab.env (secrets such as the Telegram token)
 src/qlab/db.py            DuckDB connection + schema (trials, audit, sources, series, quality_issues,
                           gauntlet_cards, thresholds, lockbox_uses, paper_entries, paper_decisions, paper_scores,
-                          registry_events, daily_reports, alerts)
+                          registry_events, daily_reports, alerts, papers, paper_triage, strategy_specs,
+                          llm_calls)
 src/qlab/ledger.py        record_trial(s) / count_trials / selection_set / list_trials / questions
 src/qlab/lockbox.py       fixed sealed date, spent questions (from the ledger), clamp_end for Studio runs
 src/qlab/audit.py         log / recent
@@ -64,6 +65,9 @@ src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, 
 src/qlab/paper/           forward paper book: sessions (bar open/close times), book (add, decide, retire), score
                           (replay through the engines), monitor (bands, CUSUM alarm), nightly (job + daily report,
                           launchd)
+src/qlab/inbox/           research inbox (decision 0010): llm (Ollama and Claude CLI providers), feed (arXiv),
+                          triage (the rubric), fulltext (arXiv HTML, excerpts), spec (templates, review),
+                          replicate (claim, post-publication, gauntlet), digest (one pass, the digest, usage)
 src/qlab/broker/          broker paper trading: base (paper-only client, types), alpaca (paper API), binance_testnet
                           (spot testnet), controls (kill, pause, resume, limits; append-only log), execution
                           (sleeves, orders, fills, reconciliation, slippage, kill and flatten)
@@ -75,18 +79,22 @@ src/qlab/api/routes_broker.py     /api/broker/status, /controls, /limits; POST /
                                   /pause, /flatten/{entry}, /resume, /limits
 src/qlab/api/routes_report.py     POST /api/report, /report/latest, /report/{id}, /reports, /alerts,
                                   /alerts/channels, POST /alerts/test
+src/qlab/api/routes_inbox.py      /api/inbox/papers, /papers/{id}, /specs, /specs/{id}, /compare, /catalog,
+                                  /digest, /usage, /jobs; POST /run, /papers/{id}/spec, /specs/{id}/review,
+                                  /specs/{id}/replicate, /specs/{id}/judge, /digest
 src/qlab/cli.py           qlab serve | init | ingest | backtest | portfolio | gauntlet | calibrate | paper | report |
-                          registry | alerts | broker ...
+                          registry | alerts | broker | inbox ...
 tests/                    pytest; conftest gives each test its own QLAB_DATA folder
 web/src/App.tsx           shell: sidebar (nav.ts), top bar, routes, command palette
 web/src/nav.ts            every page, its milestone and whether it's built (flip `ready` when done)
 web/src/pages/            Home, DataHealth, BacktestStudio, PortfolioLab, Gauntlet, Ledger, StrategyBoard,
-                          TradingDesk, System, Audit, Glossary, Placeholder
+                          TradingDesk, ResearchInbox, System, Audit, Glossary, Placeholder
 web/src/components/       Card, Stat, Badge, InfoTip, DataTable, EChart, Icon, Clocks, Toast, CommandPalette
 .github/workflows/ci.yml  ruff + pytest, and web type-check + build, on every push
 docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack, 0004 gauntlet,
                           0005 portfolios and forward evidence first, 0006 crypto cross-section, 0007 paper book,
-                          0008 registry, daily report and alerts, 0009 broker paper trading
+                          0008 registry, daily report and alerts, 0009 broker paper trading, 0010 research
+                          inbox
 docs/preregistration/     batches written down and committed before they run
 ops/launchd/              template for the nightly job (rendered by `make paper-launchd`, never installed)
 ```
@@ -106,7 +114,8 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M7a | Forward paper book | **Done** (tag `m7a`). Decisions before outcomes, engine-exact scoring, frozen bands, CUSUM alarm, nightly job, Trading Desk. |
 | M6 | Registry, daily report, alerts | **Done** (tag `m6`). Lifecycle states derived for every card, a strict near-miss rule, a daily report after every nightly job, four alert rules (file, macOS, Telegram), Strategy Board. |
 | M7b | Broker paper trading | **Done** (tag `m7b`). Paper-only adapters (Alpaca paper, Binance testnet), sleeves, raw-price sizing, opening-auction orders, limits, kill switch in the top bar, reconciliation, slippage vs the model. Alpaca paper account connected; nothing enrolled yet (the owner's call). |
-| M4, M5 | Inbox, mining | Next, in that order (decision 0005). |
+| M4 | Research inbox | **Done** (tag `m4`). arXiv feed with frontier queries, a seven-point rubric from the local model, specs from the full text onto existing templates, the owner's review, replication with history before each window, post-publication runs, a weekly digest, the cost meter, Research Inbox page. Three papers' TSMOM benchmarks replicated within tolerance (decision 0010). |
+| M5 | Strategy mining | Next (decision 0011). |
 | M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
 ## 5. What M1 and M2 delivered (facts worth knowing)
@@ -511,12 +520,40 @@ raw kurtosis `g4`, and `V` the variance of trial Sharpe ratios:
 Calibration: pure-noise strategies give the false-positive rate (target ≤ 5%); planted regime-switching
 drifts give detection power versus data length. Web: Gauntlet Console and Ledger page.
 
-### M4: research inbox
+### M4: research inbox (done; decision 0010)
 
-arXiv API (`cat:q-fin.TR OR q-fin.PM OR q-fin.ST OR q-fin.CP`, sorted by submission date) → triage with the
-two-minute rubric (ROADMAP §12) via Ollama `qwen3.6:35b` in JSON mode → `StrategySpec` → human review queue →
-code from templates → replication → post-publication test → gauntlet. Provider interface so the Claude CLI
-can be swapped in.
+**One pass** (`qlab inbox run`, or Run on the Research Inbox page; about 15 minutes for 225 papers):
+1. Fetch the newest arXiv q-fin listing (`TR`, `PM`, `ST`, `CP`) plus the frontier queries (`digest.QUERIES`, or
+   `QLAB_INBOX_QUERIES` separated by `;`), with a 3-second pause between calls.
+2. Score each new abstract on the seven-point rubric with Ollama (`qwen3.6:35b`, temperature 0, seed 7, 16k
+   context). Answers are validated strictly, the score is recomputed from the dots, and a bad answer gets one retry.
+3. Draft specs for the best (score 5 or more by default) from excerpts of the full text (arXiv's HTML version,
+   cached in `raw/arxiv`), or from the abstract when there is none.
+4. Save the digest (`reports/inbox`) and send its headline through the alert channels.
+
+**Specs** name one of the lab's templates, a target it has data for, and parameters inside the template's ranges,
+plus what the paper claims. Nothing the model writes is run; a paper no template fits is `needs_code`. Review:
+`qlab inbox review <spec> approve|reject --reason ...` (edits allowed), or the three-pane review on the page.
+
+**Replication** (`qlab inbox replicate <spec>`): the claimed sample, clipped to the data and the research period, with
+two years of history before the window (`history_from` on both runners) and the window opening only once two years of
+data exist. It counts as replicated within max(0.3, 2·√((1 + SR²/2)/years)) of the claim. A post-publication run
+follows when the paper predates the lockbox. Every run is a ledger trial (source `inbox`). `qlab inbox judge <spec>`
+sends a spec to the gauntlet.
+
+**Models and money:** `QLAB_LLM_PROVIDER` (`ollama` default, or `claude` for the Claude CLI), `QLAB_LLM_MODEL`,
+`QLAB_OLLAMA_URL`, `QLAB_LLM_CTX`. Paid calls stop at `QLAB_LLM_BUDGET_USD` a month (default 0, so none).
+`qlab inbox usage` and the page show the meter.
+
+**First real pass, 2026-10-19:** 225 papers, 230 calls, 0 USD; reviewed by Claude as the owner's delegate, every claim
+checked in the paper's text. Replicated within tolerance: the TSMOM benchmarks of 2306.13661 (claim 0.59, lab 0.50),
+2601.05975 (0.45, 0.39) and 2406.08742 (1.01, 0.48), and 2609.07946's vol-controlled 50/30/20 (0.83, 0.46,
+approximate). Not replicated: industry trend (1.39, 0.63) and gold Forecast-to-Fill (2.88, 0.27). The method was
+fixed twice after the first runs (history before windows); all 24 trials are in the ledger and the verdicts never
+changed. Two specs wait as `needs_code` (X-Trend, NoLBERT topics).
+
+**Next:** schedule the weekly run (the owner's call); a manual form for SSRN or journal papers; read arXiv's LaTeX
+source for papers without HTML; flag post-publication windows too short to judge.
 
 ### M5: strategy mining
 

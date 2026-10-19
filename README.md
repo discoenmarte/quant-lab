@@ -34,6 +34,12 @@ Broker paper trading: put paper keys in `.env` (`ALPACA_KEY`, `ALPACA_SECRET`; B
 `uv run qlab broker enroll <entry> --reason ... --confirm <entry>`), and the nightly job sends its decisions to
 the paper account. The KILL button in the top bar stops everything at once.
 
+Research inbox: start Ollama (`ollama serve`) and run `uv run qlab inbox run` (or the Run button on the Research
+Inbox page). It reads new arXiv q-fin papers plus keyword searches, scores each abstract on a seven-point rubric
+with the local model, and drafts specs for the best from their full text. You approve or reject each spec with a
+reason; approved ones are replicated against the paper's claim, tested after publication, and can go to the
+gauntlet. A digest of the week goes out through the alert channels.
+
 Daily report: the nightly job ends with a report of what the lab tested, what passed, what is in the paper book and
 how it is doing, and whether the data is fresh. Read it on the Strategy Board, or build one now with `make report`.
 Alerts (a new candidate, a decay alarm, stale data, a failed nightly job) go to `data/alerts/alerts.jsonl` and macOS
@@ -85,7 +91,7 @@ flowchart LR
 | Ledger | `qlab.ledger`, `qlab.audit` | Append-only. Every backtest is a trial on a research question; every action is an audit event. |
 | Paper book | `qlab.paper` | Each day's targets are recorded before the next bar exists and scored with the backtest engines against bands frozen when a card joins. |
 | Registry, report, alerts | `qlab.registry`, `qlab.report`, `qlab.alerts` | A card's lifecycle state is derived from its verdict, the paper book and retirements, never stored. The daily report reads what the lab recorded and runs no backtest. Alerts fire on changes between two reports. |
-| Inbox | `qlab.inbox` | Papers become structured `StrategySpec` records through an LLM provider interface (local Ollama by default). |
+| Inbox | `qlab.inbox` | arXiv papers scored on a seven-point rubric and mapped onto the lab's existing templates by a local model (paper text is untrusted data, and nothing the model writes is run). The owner reviews; replication and post-publication runs are ledger trials. |
 | Mining | `qlab.mining` | Budgeted search over a strategy grammar. Every candidate is a ledger trial, and the significance bar rises with N. |
 | API | `qlab.api` | Thin HTTP layer, no business logic. The web app, the CLI and (later) a Telegram bot all use it. |
 | Web | `web/` | Static React app that reads the API only. Every page belongs to a milestone. |
@@ -123,7 +129,7 @@ flowchart LR
 | M3 | Validation gauntlet | 10 stages on edge returns, fixed lockbox, calibration (three studies), Gauntlet Console, Ledger page | done |
 | M3b | Portfolio lab | Multi-asset panels, weights engine, six diversified strategies, portfolio gauntlet and calibration, pre-registered batches | done |
 | M3c | Breadth | Survivorship-free crypto cross-section (588 Binance USDT pairs, delisted ones included), point-in-time universes, drifting positions, four published crypto factor rules, a cross-sectional null, calibration study E and pre-registered verdicts ([decision 0006](docs/decisions/0006-crypto-cross-section.md)) | done |
-| M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
+| M4 | Research inbox | arXiv feed with frontier queries, a seven-point rubric from a local model, specs drafted from the full text onto existing templates, the owner's review, replication against the claim and after publication, a weekly digest; three papers' TSMOM benchmarks replicated within tolerance ([decision 0010](docs/decisions/0010-research-inbox.md)) | done |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
 | M6 | Registry and alerts | Lifecycle states for every card and a strict near-miss rule (only the luck stages failed, p ≤ 0.10, PSR ≥ 0.80), a daily lab report from the ledger, cards, paper book, audit log and data freshness, four alert rules through a file, macOS and Telegram, the report at the end of the nightly job, Strategy Board ([decision 0008](docs/decisions/0008-registry-report-alerts.md)) | done |
 | M7a | Forward paper book | Daily targets recorded before the next bar exists, scored with the backtest engines against frozen research bands, a CUSUM decay alarm, a nightly job, Trading Desk ([decision 0007](docs/decisions/0007-forward-paper-book.md)) | done |

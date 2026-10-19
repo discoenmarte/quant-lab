@@ -763,3 +763,152 @@ export interface ReportSummary {
   n_alerts: number;
   headline: HeadlineItem[];
 }
+
+/* M5: strategy mining */
+
+/** One mining job as the jobs board lists it. */
+export interface MiningJob {
+  job_id: string;
+  created_at: string;
+  question: string;
+  scope: string;
+  paradigm: string;
+  status: 'queued' | 'running' | 'done' | 'stopped' | 'failed' | 'refused';
+  settings: { max_trials: number; max_minutes: number; workers: number; seed: number; banned: string[]; note: string };
+  n_trials: number | null;
+  best_strategy: string | null;
+  best_edge: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  message: string | null;
+  live?: boolean;
+}
+
+/** A mined candidate in a job's report. */
+export interface MiningCandidate {
+  strategy: string;
+  params: Record<string, number>;
+  spec: Record<string, unknown>;
+  text: string;
+  formula: string | null;
+  edge: number;
+  gross_edge: number;
+  sharpe: number | null;
+  cagr: number | null;
+  max_dd: number | null;
+  turnover: number | null;
+  exposure: number | null;
+  nodes: number | null;
+  dsr: number;
+  sr0: number;
+  n_trials: number;
+  originality: { rule: string | null; corr: number | null };
+  session: string;
+  rationale?: string | null;
+}
+
+/** One point of the race between the best find and the luck threshold. */
+export interface MiningCurvePoint {
+  n: number;
+  N: number;
+  best: number | null;
+  sr0: number;
+  bar: number;
+}
+
+/** A mining job's report, live while it runs. */
+export interface MiningReport {
+  job_id: string;
+  status: MiningJob['status'];
+  question: string;
+  paradigm: string;
+  scope: { kind: string; name: string; source: string };
+  settings: MiningJob['settings'] & { hint?: string };
+  research?: [string, string];
+  n_days?: number;
+  prior_n?: number;
+  thresholds_version?: number;
+  dsr_variance?: string;
+  budget?: MiningBudget;
+  progress: {
+    n_trials: number;
+    n_valid?: number;
+    leaks?: number;
+    elapsed?: number;
+    best_edge?: number | null;
+    best_strategy?: string | null;
+    best_text?: string | null;
+    N?: number;
+    sr0?: number;
+    bar?: number;
+  };
+  curve: MiningCurvePoint[];
+  reference?: { rule: string; strategy: string; params: Record<string, number>; edge: number | null; gross_edge: number | null; turnover: number | null }[];
+  top: MiningCandidate[];
+  coverage?: Record<string, Record<string, number>>;
+  histogram?: { bins: number[]; counts: number[]; luck_sd: number; n: number; below_zero: number };
+  cells?: { rows: string[]; cols: string[]; values: [number, number | null][] };
+  proposals?: { strategy: string; text: string; rationale: string }[];
+  outside?: string[];
+  llm?: { calls: number; rejected: number; model: string };
+  cards?: { strategy: string; card_id: string; verdict: string; failed_stage: string | null; at: string }[];
+  message?: string;
+  stopped?: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+/** A mining question's trial budget. */
+export interface MiningBudget {
+  question: string;
+  max_trials: number;
+  used: number;
+  remaining: number;
+  reason: string;
+  updated_at: string | null;
+}
+
+/** What the miner can build, and where. */
+export interface MiningGrammar {
+  terminals: Record<string, string>;
+  operators: Record<string, string[]>;
+  windows: number[];
+  max_nodes: number;
+  max_depth: number;
+  components: string[];
+  rules: Record<string, string[]>;
+  paradigms: string[];
+  default_budget: number;
+  universes: { name: string; description: string }[];
+  instruments: [string, string][];
+}
+
+/** One row of the mining calibration's paradigm benchmark. */
+export interface MiningBenchmarkRow {
+  family: string;
+  scenario: string;
+  true_edge: number | null;
+  n: number;
+  admitted: number;
+  rate: number;
+  best_edge: number | null;
+  sr0: number | null;
+  formula_share: number | null;
+  seconds: number | null;
+  failed: Record<string, number>;
+}
+
+/** The latest mining calibration study. */
+export interface MiningCalibration {
+  id: string;
+  created_at: string;
+  headline: string;
+  fpr_overall: number;
+  thresholds_version: number;
+  settings: { budget: Record<string, number>; base_seed: number; n_runs: number; n_trials: number; true_edges: Record<string, number> };
+  noise: { family: string; scenario: string; n: number; admitted: number; rate: number; low: number; high: number }[];
+  power: { family: string; true_edge: number; n: number; admitted: number; rate: number }[];
+  benchmark: MiningBenchmarkRow[];
+  elapsed_s: number;
+}

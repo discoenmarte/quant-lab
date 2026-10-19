@@ -16,6 +16,7 @@ import { Gauntlet } from './pages/Gauntlet';
 import { Glossary } from './pages/Glossary';
 import { Home } from './pages/Home';
 import { Ledger } from './pages/Ledger';
+import { MiningLab } from './pages/MiningLab';
 import { PortfolioLab } from './pages/PortfolioLab';
 import { Placeholder } from './pages/Placeholder';
 import { ResearchInbox } from './pages/ResearchInbox';
@@ -33,6 +34,7 @@ const PAGES: Record<string, ReactElement> = {
   '/ledger': <Ledger />,
   '/board': <StrategyBoard />,
   '/inbox': <ResearchInbox />,
+  '/mining': <MiningLab />,
   '/desk': <TradingDesk />,
   '/system': <System />,
   '/audit': <Audit />,

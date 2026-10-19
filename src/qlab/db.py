@@ -159,6 +159,74 @@ SCHEMA = [
         conditions VARCHAR,
         path VARCHAR
     )""",
+    # M7b: broker paper trading. Sleeves give paper-book entries their own slice of a paper account; orders mirror
+    # what the broker says about each order the lab sent; fills and control actions are append-only; baselines are
+    # the holdings an account had before the lab traded in it; limits are versioned and loosening waits 24 hours.
+    """CREATE TABLE IF NOT EXISTS broker_sleeves (
+        entry_id VARCHAR PRIMARY KEY,
+        broker VARCHAR,
+        capital DOUBLE,
+        status VARCHAR,
+        enrolled_at TIMESTAMP,
+        reason VARCHAR,
+        actor VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS broker_orders (
+        client_id VARCHAR PRIMARY KEY,
+        entry_id VARCHAR,
+        broker VARCHAR,
+        purpose VARCHAR,
+        as_of DATE,
+        symbol VARCHAR,
+        side VARCHAR,
+        qty DOUBLE,
+        tif VARCHAR,
+        ref_price DOUBLE,
+        planned_at TIMESTAMP,
+        submitted_at TIMESTAMP,
+        late BOOLEAN,
+        broker_id VARCHAR,
+        status VARCHAR,
+        filled_qty DOUBLE,
+        avg_price DOUBLE,
+        message VARCHAR,
+        updated_at TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS broker_fills (
+        fill_id VARCHAR PRIMARY KEY,
+        client_id VARCHAR,
+        broker VARCHAR,
+        symbol VARCHAR,
+        side VARCHAR,
+        qty DOUBLE,
+        price DOUBLE,
+        fee DOUBLE,
+        fee_asset VARCHAR,
+        filled_at TIMESTAMP,
+        recorded_at TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS broker_controls (
+        ts TIMESTAMP,
+        action VARCHAR,
+        scope VARCHAR,
+        reason VARCHAR,
+        actor VARCHAR,
+        effective_at TIMESTAMP,
+        payload VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS broker_baselines (
+        broker VARCHAR,
+        symbol VARCHAR,
+        qty DOUBLE,
+        taken_at TIMESTAMP,
+        PRIMARY KEY (broker, symbol)
+    )""",
+    """CREATE TABLE IF NOT EXISTS broker_reconciliations (
+        ts TIMESTAMP,
+        broker VARCHAR,
+        ok BOOLEAN,
+        details VARCHAR
+    )""",
     # M6: every alert raised, with what each channel did with it.
     """CREATE TABLE IF NOT EXISTS alerts (
         alert_id VARCHAR PRIMARY KEY,

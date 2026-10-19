@@ -27,6 +27,12 @@ Development with hot reload: `make dev-api` in one terminal, `make dev-web` in a
 Forward paper book: add gauntlet cards on the Trading Desk (or `uv run qlab paper add <card>`), then run
 `make paper-nightly` after each US close, or `make paper-launchd` to print a launchd job that does it for you.
 
+Daily report: the nightly job ends with a report of what the lab tested, what passed, what is in the paper book and
+how it is doing, and whether the data is fresh. Read it on the Strategy Board, or build one now with `make report`.
+Alerts (a new candidate, a decay alarm, stale data, a failed nightly job) go to `data/alerts/alerts.jsonl` and macOS
+notifications; Telegram turns on when `QLAB_TELEGRAM_TOKEN` and `QLAB_TELEGRAM_CHAT` are set in `data/lab.env`
+(git ignores it). `make alert-test` checks every channel.
+
 ## Architecture
 
 Simple, strong, and able to grow. One Python package, one database file, one API, one static web app. Each
@@ -70,6 +76,8 @@ flowchart LR
 | Portfolio | `qlab.portfolio` | A panel aligns several instruments on one calendar: static panels on the dates every member shares, dynamic panels (the crypto cross-section) with an availability mask and point-in-time membership. A portfolio strategy is a pure function `weights = f(panel, **params)`; the engine fills at the next open with per-instrument costs (drifting positions on dynamic panels) and judges against equal weight through the same engine. |
 | Gauntlet | `qlab.gauntlet` | Judges a *subject* (a single-instrument rule or a portfolio rule) over its family's parameter grid, on research data before the fixed lockbox date, on the edge beyond buy-and-hold. Returns a report card: ten stages with value, threshold, pass/fail and chart data. Thresholds are versioned and calibrated on synthetic markets. |
 | Ledger | `qlab.ledger`, `qlab.audit` | Append-only. Every backtest is a trial on a research question; every action is an audit event. |
+| Paper book | `qlab.paper` | Each day's targets are recorded before the next bar exists and scored with the backtest engines against bands frozen when a card joins. |
+| Registry, report, alerts | `qlab.registry`, `qlab.report`, `qlab.alerts` | A card's lifecycle state is derived from its verdict, the paper book and retirements, never stored. The daily report reads what the lab recorded and runs no backtest. Alerts fire on changes between two reports. |
 | Inbox | `qlab.inbox` | Papers become structured `StrategySpec` records through an LLM provider interface (local Ollama by default). |
 | Mining | `qlab.mining` | Budgeted search over a strategy grammar. Every candidate is a ledger trial, and the significance bar rises with N. |
 | API | `qlab.api` | Thin HTTP layer, no business logic. The web app, the CLI and (later) a Telegram bot all use it. |
@@ -84,8 +92,9 @@ flowchart LR
 - **Time is UTC** in storage. The UI shows exchange time next to it.
 - **Reproducible.** Seeds are fixed for simulations, inputs are fingerprinted, and dependencies are locked
   (`uv.lock`, `package-lock.json`).
-- **Safe by default.** The server binds to 127.0.0.1, secrets stay in `.env` (ignored), and no code path can
-  send a real order. From M7 on, reducing risk is one click and increasing it needs a reason and a delay.
+- **Safe by default.** The server binds to 127.0.0.1, secrets stay in `.env` or `data/lab.env` (both ignored),
+  and no code path can send a real order. From M7 on, reducing risk is one click and increasing it needs a
+  reason and a delay.
 
 ### Scaling path (taken only when a limit is actually hit)
 
@@ -109,7 +118,7 @@ flowchart LR
 | M3c | Breadth | Survivorship-free crypto cross-section (588 Binance USDT pairs, delisted ones included), point-in-time universes, drifting positions, four published crypto factor rules, a cross-sectional null, calibration study E and pre-registered verdicts ([decision 0006](docs/decisions/0006-crypto-cross-section.md)) | done |
 | M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
-| M6 | Registry and alerts | Strategy board, portfolio, alert rules | planned |
+| M6 | Registry and alerts | Lifecycle states for every card and a strict near-miss rule, a daily lab report from the ledger, cards, paper book, audit log and data freshness, four alert rules through a file, macOS and Telegram, the report at the end of the nightly job, Strategy Board ([decision 0008](docs/decisions/0008-registry-report-alerts.md)) | done |
 | M7a | Forward paper book | Daily targets recorded before the next bar exists, scored with the backtest engines against frozen research bands, a CUSUM decay alarm, a nightly job, Trading Desk ([decision 0007](docs/decisions/0007-forward-paper-book.md)) | done |
 | M7b | Broker paper trading | Broker paper accounts, real fills and reconciliation, kill switch | planned |
 | M8 | Go-live gate | Evidence checklist, limits outside any model | planned |
@@ -121,13 +130,14 @@ The full plan, with each milestone's screens, costs and the research it rests on
 ## Repository layout
 
 ```
-src/qlab/          Python package (data, backtest, portfolio, gauntlet, paper, api, ledger, lockbox, audit)
+src/qlab/          Python package (data, backtest, portfolio, gauntlet, paper, registry, report, alerts, api, ledger,
+                   lockbox, audit)
 tests/             pytest suite; each test gets its own data folder
 web/               React app (Vite + TypeScript)
 docs/STYLE.md      docstring and commit conventions
 docs/decisions/    architecture decision records
 docs/HANDOFF.md    implementation status and how to continue
-ops/launchd/       template for the nightly paper job (rendered and printed, never installed)
+ops/launchd/       template for the nightly job (paper book and daily report; rendered and printed, never installed)
 data/              local data lake and database (not committed)
 ```
 
@@ -138,6 +148,6 @@ data/              local data lake and database (not committed)
 3. [Keep the stack small](docs/decisions/0003-orchestration-and-ui-stack.md)
 4. [Gauntlet design: edge returns, a fixed lockbox, honest N, thresholds from calibration](docs/decisions/0004-gauntlet-design.md)
 5. [Portfolios and forward evidence before the paper inbox and mining](docs/decisions/0005-portfolios-and-forward-evidence-first.md)
-
 6. [A survivorship-free crypto cross-section: dynamic panels, drifting positions and a cross-sectional null](docs/decisions/0006-crypto-cross-section.md)
 7. [The forward paper book: decisions before outcomes, frozen expectations, honest power](docs/decisions/0007-forward-paper-book.md)
+8. [The registry, the daily report and alerts: derived states, a strict near-miss rule, alerts on changes](docs/decisions/0008-registry-report-alerts.md)

@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-18, after M3, M3b, M7a and M3c
+- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c and M6
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -36,17 +36,23 @@ How to pick this project up and keep building it. Read this, then `README.md`, `
 ## 3. Repository map
 
 ```
-src/qlab/config.py        paths (QLAB_DATA overrides the data folder; tests use it)
+src/qlab/config.py        paths (QLAB_DATA overrides the data folder; tests use it); setting() reads the
+                          environment, then <data>/lab.env (secrets such as the Telegram token)
 src/qlab/db.py            DuckDB connection + schema (trials, audit, sources, series, quality_issues,
-                          gauntlet_cards, thresholds, lockbox_uses, paper_entries, paper_decisions, paper_scores)
+                          gauntlet_cards, thresholds, lockbox_uses, paper_entries, paper_decisions, paper_scores,
+                          registry_events, daily_reports, alerts)
 src/qlab/ledger.py        record_trial(s) / count_trials / selection_set / list_trials / questions
 src/qlab/lockbox.py       fixed sealed date, spent questions (from the ledger), clamp_end for Studio runs
 src/qlab/audit.py         log / recent
 src/qlab/timeutil.py      UTC helpers and clocks
 src/qlab/glossary.py      plain-language definitions used by UI tooltips
+src/qlab/registry.py      lifecycle state of every card (derived), the near-miss rule, retire
+src/qlab/report.py        the daily lab report: build (since the last one), load, latest, list, render_text
+src/qlab/alerts.py        the four alert rules (on changes), channels (file, macOS, Telegram), deliver, record
 src/qlab/backtest/metrics.py   Sharpe, Sortino, CAGR, drawdowns, Calmar, exposure, turnover, edge (appraisal ratio)
 src/qlab/data/            sources (binance: archive listing, MD5-checked downloads, the USDT universe filter;
-                          yahoo; french), ingest (incl. ingest_usdt_universe), store, quality, universe (manifest)
+                          yahoo; french), ingest (incl. ingest_usdt_universe), store, quality, universe (manifest),
+                          freshness (lag behind the latest finished session, with tolerances)
 src/qlab/portfolio/       panel (static universes; dynamic ones with an availability mask and point-in-time
                           membership), engine (constant fractions, or drifting positions on dynamic panels),
                           strategies (incl. the cross-sectional crypto rules xs_*), leakage, runner, synthetic
@@ -54,22 +60,28 @@ src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, 
                           subjects (bars or panel; day shuffles and the cross-sectional null for dynamic panels),
                           pipeline (ten stages, cards, lockbox), calibration (incl. synthetic crypto cross-sections)
 src/qlab/paper/           forward paper book: sessions (bar open/close times), book (add, decide, retire), score
-                          (replay through the engines), monitor (bands, CUSUM alarm), nightly (job, launchd)
+                          (replay through the engines), monitor (bands, CUSUM alarm), nightly (job + daily report,
+                          launchd)
 src/qlab/api/main.py      FastAPI app; serves web/dist at /
 src/qlab/api/routes_core.py    /api/health, /system, /overview, /audit, /glossary, POST /demo
 src/qlab/api/routes_paper.py   /api/paper/book, /entries, /entries/{id}, /entries/{id}/retire, /run, /score
-src/qlab/cli.py           qlab serve | init | ingest | backtest | portfolio | gauntlet | calibrate | paper ...
+src/qlab/api/routes_registry.py   /api/registry, /registry/{card}/retire
+src/qlab/api/routes_report.py     POST /api/report, /report/latest, /report/{id}, /reports, /alerts,
+                                  /alerts/channels, POST /alerts/test
+src/qlab/cli.py           qlab serve | init | ingest | backtest | portfolio | gauntlet | calibrate | paper | report |
+                          registry | alerts ...
 tests/                    pytest; conftest gives each test its own QLAB_DATA folder
 web/src/App.tsx           shell: sidebar (nav.ts), top bar, routes, command palette
 web/src/nav.ts            every page, its milestone and whether it's built (flip `ready` when done)
-web/src/pages/            Home, DataHealth, BacktestStudio, PortfolioLab, Gauntlet, Ledger, TradingDesk, System,
-                          Audit, Glossary, Placeholder
+web/src/pages/            Home, DataHealth, BacktestStudio, PortfolioLab, Gauntlet, Ledger, StrategyBoard,
+                          TradingDesk, System, Audit, Glossary, Placeholder
 web/src/components/       Card, Stat, Badge, InfoTip, DataTable, EChart, Icon, Clocks, Toast, CommandPalette
 .github/workflows/ci.yml  ruff + pytest, and web type-check + build, on every push
 docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack, 0004 gauntlet,
-                          0005 portfolios and forward evidence first, 0006 crypto cross-section, 0007 paper book
+                          0005 portfolios and forward evidence first, 0006 crypto cross-section, 0007 paper book,
+                          0008 registry, daily report and alerts
 docs/preregistration/     batches written down and committed before they run
-ops/launchd/              template for the nightly paper job (rendered by `make paper-launchd`, never installed)
+ops/launchd/              template for the nightly job (rendered by `make paper-launchd`, never installed)
 ```
 
 Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help` lists everything.
@@ -85,7 +97,8 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M3b | Portfolio lab | **Done** (tag `m3b`). Engine, six strategies, portfolio gauntlet and calibration, Portfolio Lab page. |
 | M3c | Breadth: crypto cross-section | **Done** (tag `m3c`). 588 Binance USDT pairs incl. delisted, point-in-time universes, drifting positions, four crypto factor rules, cross-sectional null, study E, eight pre-registered verdicts (all rejected). |
 | M7a | Forward paper book | **Done** (tag `m7a`). Decisions before outcomes, engine-exact scoring, frozen bands, CUSUM alarm, nightly job, Trading Desk. |
-| M6, M7b, M4, M5 | Registry, broker paper trading, inbox, mining | In that order (decision 0005). |
+| M6 | Registry, daily report, alerts | **Done** (tag `m6`). Lifecycle states derived for every card, a strict near-miss rule, a daily report after every nightly job, four alert rules (file, macOS, Telegram), Strategy Board. |
+| M7b, M4, M5 | Broker paper trading, inbox, mining | In that order (decision 0005). |
 | M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
 ## 5. What M1 and M2 delivered (facts worth knowing)
@@ -245,9 +258,77 @@ universe.
   trend-filter cards and risk parity, every decision 11.5 to 59.5 hours before its open, all inside their bands.
 - **Started on the real lab on 2026-10-18:** entries `922c0528e008` (trend_filter:all_etfs, card `9f757395ca74`)
   and `ded5af67de61` (trend_filter:asset_classes_long, card `c1c207ae352d`), both rejected near-misses. First
-  decisions on the 2026-10-16 close, recorded 19.7 hours before the 2026-10-19 open (gross 71% and 43%).
+  decisions on the 2026-10-16 close, recorded 19.7 hours before the 2026-10-19 open (gross 71% and 43%). By decision
+  0008's rule only `c1c207ae352d` is a near-miss; `9f757395ca74` also failed walk-forward.
   Keep it running: `make paper-nightly` after each US close, or `make paper-launchd` and follow the printed steps.
 
+
+### M6: registry, daily report and alerts (done; decision 0008)
+
+**Registry** (`qlab registry list`, Strategy Board):
+
+- Every card gets one lifecycle state, derived each time from its verdict and stages, the paper book and the owner's
+  retirements (`registry_events`). Nothing is stored that could drift.
+- By precedence: in paper book, retired, validated, candidate, near-miss, rejected. The verdict is always shown
+  beside the state.
+- **Near-miss:** rejected, and every failed stage is permutation or significance. On the real lab that is four cards:
+  - `d2c5a4b45b03` xs_low_vol:crypto_top30 (p 0.012, DSR 0.00)
+  - `c1c207ae352d` trend_filter:asset_classes_long, in the book (p 0.046)
+  - `353323a3bd56` xs_momentum:all_etfs (p 0.18)
+  - `1335bb8e04b8` risk_parity:asset_classes_long (p 0.29)
+- "Near" is about which stages failed, not by how much, so tiles show p and DSR. Whether to tighten the rule is an
+  open question for the owner (decision 0008 §2).
+- Actions on the board: put a card in the paper book (`POST /api/paper/entries`) and retire one with a reason
+  (`qlab registry retire <card> --reason ...`). Retiring a card ends its active paper entry.
+
+**Daily report** (`qlab report`, `make report`, `POST /api/report`; JSON in `reports/daily/`):
+
+- Covers the time since the previous report, however either was built: trials by origin and question (with the N on
+  each question), new cards and state changes, registry counts, the paper book from its saved scores (bands, CUSUM,
+  decisions and refusals), data freshness and the nightly job.
+- `headline` is the plain answer, one toned sentence per topic.
+- It runs no backtest, so it adds no trial. It takes under a second on the real lab.
+
+**Freshness** (`data/freshness.py`): lag of each source's stalest default symbol behind the latest finished session.
+Tolerances: ETFs 1 session (holidays aren't modelled), Binance 2 days (the archive publishes a day late), Ken French
+95 days.
+
+**Alerts** (`qlab alerts list | channels | test`, `make alert-test`):
+
+- **Rules:** a new candidate or validated card, an active entry's decay alarm, stale data, a failed nightly job.
+- The first three fire once, when a condition first appears; a failed nightly job alerts every time. The nightly job
+  also sends the headline as a digest.
+- A forward edge outside its band is not an alert (it happens one day in ten by design).
+- **Channels:** `file` (`data/alerts/alerts.jsonl`, always on), `macos` (default on macOS), `telegram` (only when
+  `QLAB_TELEGRAM_TOKEN` and `QLAB_TELEGRAM_CHAT` are set; put them in `data/lab.env`). `QLAB_ALERT_CHANNELS`
+  overrides the list.
+- The token never appears in logs, the API or error messages.
+
+**Nightly hook:**
+
+- `qlab paper nightly` now ends with the report (through the API when `qlab serve` is up).
+- A crashed step still ends in a report and a failure alert.
+- If the report itself fails, the alert goes straight to the channels without the database.
+- `--no-report` skips it.
+
+**Checked in the browser** against a scratch copy of the lab (the 18 real cards plus the M7a replay book with 34
+forward days):
+
+- the board and its columns
+- building a report from the web
+- putting a near-miss in the book and retiring a card (both showed up as moves in the next report)
+- a simulated failed night (one alert, the stale-data alerts not repeated)
+- the alert log, and the layout at 375 px
+
+`osascript` accepted a real test notification (whether it shows depends on macOS notification settings).
+
+**Follow-ups worth doing:**
+
+1. Decide whether the near-miss rule should also bound p (decision 0008 §2), before the next batch.
+2. The allocator (HRP or risk parity with caps, a correlation heatmap) once something is validated.
+3. A two-way Telegram bot with M7b's kill switch (outbound only today).
+4. Something outside the lab that notices a nightly run that never happened.
+5. The top bar overflows at phone width on every page (pre-existing).
 
 ### M1: data lake (done; kept for reference)
 
@@ -344,6 +425,16 @@ holds at mining scale.
     and calibration study E took 105 minutes for 800 runs.
   - **Rules by kind:** cross-sectional rules (`kind="dynamic"`) are refused on static ETF universes and static
     rules on the crypto universes (`runner.check_fit`).
+
+- Daily report and alerts:
+  - **One window:** each report covers the time since the previous one, so building one from the web or the CLI
+    moves the window for the next nightly report.
+  - **Quiet runs:** `--no-notify` (or `"notify": false`) still consumes alert transitions; they stay in the alert log
+    and the file channel.
+  - **Tests** set `QLAB_ALERT_CHANNELS=file` (conftest), so they never pop notifications or reach Telegram. Do the
+    same for scratch servers.
+  - **macOS notifications** come from `osascript`. If none appear, allow notifications for Script Editor in System
+    Settings; the file channel has every alert anyway.
 
 ## 8. References
 

@@ -89,7 +89,7 @@ export function CalibrationPanel() {
   const latest = reports.data?.[0] ?? null;
   const running = jobs.data?.find((j) => j.status === 'running');
   const [reps, setReps] = useState({ noise_reps: 100, power_reps: 40 });
-  const [changes, setChanges] = useState<Record<string, number>>({});
+  const [changes, setChanges] = useState<Record<string, number | string>>({});
   const [whatIf, setWhatIf] = useState<CalibrationSummary | null>(null);
 
   const finished = jobs.data?.filter((j) => j.status === 'done').length ?? 0;
@@ -178,6 +178,17 @@ export function CalibrationPanel() {
                     />
                   </label>
                 ))}
+                <label className="row" style={{ justifyContent: 'space-between' }}>
+                  <span className="muted small">Regimes judge</span>
+                  <select
+                    style={{ width: 110 }}
+                    value={String(changes.regime_basis ?? latest.thresholds.regime_basis ?? 'net')}
+                    onChange={(e) => setChanges({ ...changes, regime_basis: e.target.value })}
+                  >
+                    <option value="edge">the edge</option>
+                    <option value="net">net return</option>
+                  </select>
+                </label>
                 <div className="row">
                   <button className="btn" onClick={rejudge}>Re-judge saved runs</button>
                   {whatIf && (

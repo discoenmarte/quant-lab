@@ -195,17 +195,22 @@ function fanOption(chart: Record<string, any>): EChartsOption {
   };
 }
 
-/** Regimes: average yearly net return of the strategy vs buy-and-hold in each market state. */
+/**
+ * Regimes: average yearly edge over the passive alternative, net return of the strategy and buy-and-hold in each
+ * market state. Cards from before the edge was measured have no edge bars.
+ */
 function regimesOption(chart: Record<string, any>): EChartsOption {
-  const rows = (chart.rows ?? []) as { regime: string; strategy: number; benchmark: number }[];
+  const rows = (chart.rows ?? []) as { regime: string; strategy: number; edge?: number; benchmark: number }[];
+  const hasEdge = rows.some((r) => r.edge !== undefined);
   return {
     animation: false,
-    legend: { data: ['Strategy', 'Buy & hold'], textStyle: { color: AXIS }, top: 0 },
+    legend: { data: [...(hasEdge ? ['Edge'] : []), 'Strategy', 'Buy & hold'], textStyle: { color: AXIS }, top: 0 },
     tooltip: { trigger: 'axis', valueFormatter: (v) => pct(v as number) },
     grid: { left: 48, right: 12, top: 26, bottom: 26 },
     xAxis: { type: 'category', data: rows.map((r) => r.regime), axisLabel: { color: AXIS } },
     yAxis: { type: 'value', axisLabel: { color: AXIS, formatter: (v: number) => `${Math.round(v * 100)}%` }, splitLine: { lineStyle: { color: GRID_LINE } } },
     series: [
+      ...(hasEdge ? [{ name: 'Edge', type: 'bar' as const, data: rows.map((r) => r.edge ?? null), itemStyle: { color: '#34d399' } }] : []),
       { name: 'Strategy', type: 'bar', data: rows.map((r) => r.strategy), itemStyle: { color: ACCENT } },
       { name: 'Buy & hold', type: 'bar', data: rows.map((r) => r.benchmark), itemStyle: { color: GREY } },
     ],

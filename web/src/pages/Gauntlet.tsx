@@ -43,10 +43,11 @@ const THRESHOLD_DOCS: Record<string, string> = {
   pbo_max: 'Significance: PBO at most',
   fdr_prior: 'False discovery: prior share of real ideas',
   fdr_sr1: 'False discovery: Sharpe of a real edge',
-  regime_min_share: 'Regimes: share with positive return',
+  regime_min_share: 'Regimes: share with a positive edge (or net return, by the basis)',
   max_corr: 'Diversification: correlation to validated portfolio at most',
   grid_max: 'Grid: most settings per run',
   dsr_variance: 'Significance: spread of trial Sharpes (sample, upper_half, mad, luck_bound, luck_max)',
+  regime_basis: 'Regimes: judge the edge or the net return in each regime (edge, net)',
 };
 
 /**

@@ -775,5 +775,150 @@ def broker_limits(
         typer.echo(f"  {k:<20} {v:g}")
 
 
+inbox_app = typer.Typer(help="Research inbox: arXiv papers scored by a local model, specs, review and replication",
+                        no_args_is_help=True)
+app.add_typer(inbox_app, name="inbox")
+
+
+@inbox_app.command("run")
+def inbox_run(
+    max_papers: int = typer.Option(100, help="Most papers to fetch from arXiv"),
+    triage_limit: int = typer.Option(100, help="Most papers to score in this run"),
+    spec_min_score: int = typer.Option(5, help="Rubric score needed for a draft spec"),
+    spec_limit: int = typer.Option(3, help="Most specs to draft"),
+) -> None:
+    """Fetch new papers, score them on the rubric, draft specs for the best, and send the digest.
+
+    Args:
+        max_papers: Most papers to fetch.
+        triage_limit: Most papers to score.
+        spec_min_score: Score needed for a spec.
+        spec_limit: Most specs.
+    """
+    from .inbox import digest
+
+    out = digest.run(max_papers, triage_limit, spec_min_score, spec_limit, actor="cli", log=typer.echo)
+    for line in out["digest"]["headline"]:
+        typer.echo(line)
+
+
+@inbox_app.command("papers")
+def inbox_papers(min_score: int = typer.Option(3, help="Only papers scoring at least this"),
+                 limit: int = typer.Option(20, help="How many")) -> None:
+    """Show the best-scoring papers with their rubric dots.
+
+    Args:
+        min_score: Minimum score.
+        limit: Number of papers.
+    """
+    from .inbox import triage
+
+    for p in triage.latest(min_score, limit):
+        dots = "".join("●" if (p["dots"] or {}).get(d) else "○" for d in triage.DOTS)
+        typer.echo(f"  {p['score']}/7 {dots}  {p['arxiv_id']:<12} {p['title'][:80]}")
+        if p["one_line"]:
+            typer.echo(f"        {p['one_line'][:110]}")
+
+
+@inbox_app.command("spec")
+def inbox_spec(arxiv_id: str) -> None:
+    """Draft a spec for one paper with the local model.
+
+    Args:
+        arxiv_id: Paper id, e.g. 2610.23749.
+    """
+    from .inbox import spec
+
+    s = spec.draft(arxiv_id, actor="cli")
+    typer.echo(f"spec {s['spec_id']} ({s['status']}): {s['spec']['template']} on {s['spec']['target']} "
+               f"{s['spec']['params']} fit {s['spec']['fit']}")
+
+
+@inbox_app.command("specs")
+def inbox_specs(status: str = typer.Option("", help="Only this status, e.g. draft")) -> None:
+    """List specs with their status and results.
+
+    Args:
+        status: Optional status filter.
+    """
+    from .inbox import spec
+
+    for s in spec.specs(status or None):
+        res = s["results"] or {}
+        typer.echo(f"  {s['spec_id']}  {s['status']:<14} {s['spec'].get('template', ''):<20} "
+                   f"{s['spec'].get('target', ''):<16} {(s['title'] or '')[:60]}"
+                   + (f"  [{res.get('verdict')}]" if res else ""))
+
+
+@inbox_app.command("review")
+def inbox_review(spec_id: str, decision: str = typer.Argument(..., help="approve or reject"),
+                 reason: str = typer.Option(..., help="Why")) -> None:
+    """Approve or reject a spec.
+
+    Args:
+        spec_id: Spec id.
+        decision: ``approve`` or ``reject``.
+        reason: Why.
+    """
+    from .inbox import spec
+
+    s = spec.review(spec_id, decision, reason, actor="cli")
+    typer.echo(f"{spec_id}: {s['status']}")
+
+
+@inbox_app.command("replicate")
+def inbox_replicate(spec_id: str) -> None:
+    """Replicate an approved spec over the paper's sample and after publication (ledger trials).
+
+    Args:
+        spec_id: Spec id.
+    """
+    from .inbox import replicate
+
+    s = replicate.replicate(spec_id, actor="cli")
+    r = s["results"]
+    typer.echo(f"{spec_id}: {r['verdict']} (claimed {r['claimed']['claimed_sharpe']}, lab "
+               f"{(r['in_sample'] or {}).get('sharpe')}); post-publication: "
+               f"{(r['post_publication'] or {}).get('sharpe', (r['post_publication'] or {}).get('reason'))}")
+
+
+@inbox_app.command("judge")
+def inbox_judge(spec_id: str) -> None:
+    """Send an approved spec through the gauntlet.
+
+    Args:
+        spec_id: Spec id.
+    """
+    from .inbox import replicate
+
+    s = replicate.judge(spec_id, actor="cli")
+    typer.echo(f"{spec_id}: card {s['card_id']}")
+
+
+@inbox_app.command("digest")
+def inbox_digest(days: int = typer.Option(7, help="Period in days")) -> None:
+    """Build the inbox digest and send its headline through the alert channels.
+
+    Args:
+        days: Period.
+    """
+    from .inbox import digest
+
+    for line in digest.digest(days, actor="cli")["headline"]:
+        typer.echo(line)
+
+
+@inbox_app.command("usage")
+def inbox_usage() -> None:
+    """Show the model cost meter for the last 30 days."""
+    from .inbox import digest
+
+    u = digest.usage()
+    for r in u["by_provider"]:
+        typer.echo(f"  {r['provider']:<7} {r['model']:<14} {r['purpose']:<7} {r['calls']} calls ({r['ok']} ok), "
+                   f"{r['seconds'] / 60:.1f} min, {r['tokens_in'] + r['tokens_out']:,} tokens, {r['cost_usd']:.2f} USD")
+    typer.echo(f"this month: {u['month']['cost_usd']:.2f} of {u['month']['budget_usd']:.2f} USD budget")
+
+
 if __name__ == "__main__":
     app()

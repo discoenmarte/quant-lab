@@ -265,8 +265,8 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "replication": {
         "term": "Replication",
-        "short": "The paper's rule run on the lab's data over the paper's sample, with its Sharpe ratio compared to the "
-        "claim.",
+        "short": "The paper's rule run on the lab's data over the paper's sample, its Sharpe ratio compared with "
+        "the claim.",
         "long": "It counts as replicated when it lands within the larger of 0.3 and two standard errors of a Sharpe "
         "estimate over the run's length. A match proves the code, not the edge: published results shrink.",
     },

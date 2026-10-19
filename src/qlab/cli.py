@@ -1,5 +1,5 @@
 """Command line entry point: ``qlab serve | init | ingest | backtest | portfolio | gauntlet | portfolio-gauntlet |
-calibrate | bench | demo | paper``.
+calibrate | bench | demo | paper | report | registry | alerts``.
 
 More commands arrive with each milestone (inbox, mine).
 """
@@ -400,25 +400,42 @@ def paper_retire(entry_id: str, reason: str = typer.Option(..., help="Why the en
 
 
 @paper_app.command("nightly")
-def paper_nightly(api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API to use when it is up")) -> None:
-    """Ingest the free sources, decide every active entry, and score the book. Exits 1 if a step failed.
+def paper_nightly(
+    api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API to use when it is up"),
+    report: bool = typer.Option(True, help="Build the daily report and raise its alerts at the end"),
+) -> None:
+    """Ingest the free sources, decide every active entry, score the book and build the daily report. Exits 1 if a
+    step failed.
 
     Uses the running Lab API when it answers (it holds the database), otherwise runs everything here.
 
     Args:
         api: Base URL of the Lab API.
+        report: Build the daily report and its alerts.
     """
     from .paper.nightly import nightly
     from .timeutil import now_utc
 
     typer.echo(f"== {now_utc().isoformat(timespec='seconds')}")
-    res = nightly(api, log=typer.echo)
+    res = nightly(api, log=typer.echo, report=report)
     for r in res["ingest"]:
         typer.echo(f"  ingest {r['source']:<8} {r['status']} ({r['n_series']} series)")
     for r in res["run"]:
         typer.echo(f"  run    [{r['status']:<8}] {r['question']:<34} {r['message']}")
     for r in res["score"]:
         typer.echo(f"  score  [{'ALARM' if r.get('alarm') else r['status']:<8}] {r['question']:<34} {r['message']}")
+    if res.get("error"):
+        typer.echo(f"  error  {res['error']}")
+    rep = res.get("report") or {}
+    if rep.get("error"):
+        typer.echo(f"  report failed: {rep['error']} (alert sent without the database)")
+    elif rep:
+        typer.echo(f"  report {rep['report_id']}")
+        for h in rep["headline"]:
+            typer.echo(f"    {h['text']}")
+        for a in rep["alerts"]:
+            delivery = ", ".join(f"{k} {v}" for k, v in a["delivery"].items())
+            typer.echo(f"  alert  [{a['severity']:<4}] {a['title']}  ({delivery})")
     if not res["ok"]:
         raise typer.Exit(1)
 
@@ -441,6 +458,112 @@ def paper_launchd(
     path, steps = render_launchd(config.data_dir() / "ops", hour, minute)
     typer.echo(f"Wrote {path} (runs daily at {hour:02d}:{minute:02d} local time). To install it yourself:\n")
     typer.echo("\n".join(steps))
+
+
+@app.command()
+def report(
+    notify: bool = typer.Option(True, help="Deliver alerts to every channel; --no-notify keeps them in the file only"),
+    digest: bool = typer.Option(False, help="Also send the headline as one message through the channels"),
+    api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API to use when it is up"),
+) -> None:
+    """Build the daily lab report for the time since the last one, print it, and raise its alerts.
+
+    Uses the running Lab API when it answers (it holds the database), otherwise builds it here.
+
+    Args:
+        notify: Deliver alerts beyond the file channel.
+        digest: Send the headline as a message too.
+        api: Base URL of the Lab API.
+    """
+    import httpx
+
+    from . import report as daily
+    from .paper.nightly import api_up
+
+    if api_up(api):
+        res = httpx.post(f"{api}/report", json={"trigger": "cli", "notify": notify, "digest": digest}, timeout=120)
+        res.raise_for_status()
+        rep = res.json()
+    else:
+        rep = daily.build(trigger="cli", notify=notify, send_digest=digest, actor="cli")
+    typer.echo(daily.render_text(rep))
+
+
+registry_app = typer.Typer(help="Strategy registry: every report card with its lifecycle state", no_args_is_help=True)
+app.add_typer(registry_app, name="registry")
+
+
+@registry_app.command("list")
+def registry_list(state: str = typer.Option("", help="Only this state, e.g. near_miss or in_paper_book")) -> None:
+    """Show every report card with its lifecycle state, grouped by state.
+
+    Args:
+        state: Show one state only; empty shows all.
+    """
+    from . import registry
+
+    items = registry.cards()
+    for s in registry.STATES:
+        group = [c for c in items if c["state"] == s]
+        if (state and s != state) or not group:
+            continue
+        typer.echo(f"{registry.LABELS[s]} ({len(group)})")
+        for c in group:
+            nums = (f"edge {c['edge']:+.2f}" if c["edge"] is not None else "edge –") + (
+                f", p {c['perm_p']:.3f}" if c["perm_p"] is not None else "")
+            failed = ", ".join(c["failed"]) or "none"
+            typer.echo(f"  {c['card_id']}  {c['question']:<38} {c['verdict']:<9} {nums:<24} failed: {failed}")
+
+
+@registry_app.command("retire")
+def registry_retire(card_id: str, reason: str = typer.Option(..., help="Why the card is retired")) -> None:
+    """Retire a report card; an active paper entry for it stops too.
+
+    Args:
+        card_id: Report card id.
+        reason: Why, recorded in the audit log.
+    """
+    from . import registry
+
+    c = registry.retire(card_id, reason, actor="cli")
+    typer.echo(f"{card_id}: {c['label'].lower()} since {c['since']}")
+
+
+alerts_app = typer.Typer(help="Alerts: the log, the channels, and a test message", no_args_is_help=True)
+app.add_typer(alerts_app, name="alerts")
+
+
+@alerts_app.command("list")
+def alerts_list(limit: int = typer.Option(20, help="How many alerts")) -> None:
+    """Show the latest alerts and what each channel did with them.
+
+    Args:
+        limit: Number of alerts.
+    """
+    from . import alerts
+
+    for a in alerts.recent(limit):
+        delivery = ", ".join(f"{k} {v}" for k, v in a["delivery"].items())
+        typer.echo(f"  {a['created_at']}  [{a['severity']:<4}] {a['title']}  ({delivery})")
+
+
+@alerts_app.command("channels")
+def alerts_channels() -> None:
+    """Show which channels deliver alerts (never prints a token)."""
+    from . import alerts
+
+    for c in alerts.channel_status():
+        typer.echo(f"  {c['name']:<9} {'on ' if c['enabled'] else 'off'}  {c['detail']}")
+
+
+@alerts_app.command("test")
+def alerts_test() -> None:
+    """Send a test alert through every channel and print what each one did."""
+    from . import alerts
+
+    row = alerts.send_test(actor="cli")
+    for name, result in row["delivery"].items():
+        typer.echo(f"  {name:<9} {result}")
 
 
 if __name__ == "__main__":

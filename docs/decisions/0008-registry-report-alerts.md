@@ -29,17 +29,18 @@ There is no state column that could drift from them. Six states, by precedence:
 | retired | the owner retired it, or its paper entry was retired and none is active |
 | validated | it passed every stage, the lockbox included |
 | candidate | it passed stages 1-9 and its lockbox is still sealed |
-| near-miss | rejected only at the luck stages (§2) |
+| near-miss | rejected only at the luck stages, and by little (§2) |
 | rejected | everything else |
 
 The verdict is always shown beside the state. A rejected card in the paper book reads "in paper book · rejected", so
 forward tracking is never mistaken for validation. Retiring a card that has an active entry also retires the entry.
 Re-adding a retired card to the book puts it back in the book.
 
-### 2. A near-miss failed only the stages that ask whether the result is luck
+### 2. A near-miss failed only the stages that ask whether the result is luck, and by little
 
 A near-miss is a card with verdict `rejected` whose failed stages are a non-empty subset of {permutation,
-significance}. It therefore passed every check of how the rule behaves, where the check applies:
+significance}, with a permutation p of at most 0.10 and an undeflated PSR of at least 0.80 (caps added on 2026-10-19,
+below). It therefore passed every check of how the rule behaves, where the check applies:
 
 - the look-ahead check
 - a positive edge and CAGR after costs
@@ -59,10 +60,10 @@ question, and they cost nothing in the paper book.
 **Not near-misses:** a card that failed its lockbox. The lockbox is the out-of-sample verdict, so failing it is
 evidence against the edge, not a lack of evidence.
 
-**What "near" doesn't mean.** The rule is about which stages failed, not by how much. On the real lab it labels four
-cards, and they differ a lot:
+**What "near" didn't mean at first.** As first written, the rule was about which stages failed, not by how much. On
+the real lab it labeled four cards, and they differ a lot:
 
-| Card | Question | Edge | OOS edge | Permutation p | DSR | State |
+| Card | Question | Edge | OOS edge | Permutation p | DSR | State (first rule) |
 |---|---|---|---|---|---|---|
 | `d2c5a4b45b03` | xs_low_vol:crypto_top30 | +0.43 | +1.45 | 0.012 (passed) | 0.00 | near-miss |
 | `c1c207ae352d` | trend_filter:asset_classes_long | +0.34 | +0.16 | 0.046 | 0.89 | in paper book |
@@ -72,6 +73,38 @@ cards, and they differ a lot:
 A permutation p of 0.29 is nowhere near the 0.02 threshold, so the board always shows p and DSR on every tile. A
 tighter rule, for example "and p ≤ 2× the threshold", is an open question for the owner. It should be decided before
 the next batch runs, not fitted to these four.
+
+**Update (2026-10-19): caps on how far a near-miss missed** (owner's choice). The owner answered the open question
+with two caps, both inclusive:
+
+- **Permutation p ≤ 0.10.** Five times the 0.02 threshold.
+- **Undeflated PSR ≥ 0.80.** The chance that the edge Sharpe is above zero with N = 1, before deflating for the
+  search. It uses the same autocorrelation-adjusted Sharpe variance as the Deflated Sharpe, and is computed from the
+  card's significance chart: daily edge Sharpe, skew, kurtosis, lag-1 autocorrelation and the number of research
+  days. The Deflated Sharpe itself can't serve here, because it falls with every trial on the scope. The undeflated
+  PSR asks only whether this edge, on its own, is distinguishable from zero.
+
+A card that fails either cap is `rejected`, even if only the luck stages failed. A card whose chart is missing or
+incomplete can't show it missed by little, so it isn't a near-miss either. The rule reads recorded cards; no card
+was re-judged, and the verdicts don't change. Only the derived state does.
+
+| Card | Question | Permutation p | Undeflated PSR | State before | State now |
+|---|---|---|---|---|---|
+| `d2c5a4b45b03` | xs_low_vol:crypto_top30 | 0.012 | 0.84 | near-miss | **near-miss** |
+| `c1c207ae352d` | trend_filter:asset_classes_long | 0.046 | 0.95 | in paper book (near-miss) | in paper book (near-miss) |
+| `353323a3bd56` | xs_momentum:all_etfs | 0.180 | 0.88 | near-miss | rejected (p cap) |
+| `1335bb8e04b8` | risk_parity:asset_classes_long | 0.293 | 0.90 | near-miss | rejected (p cap) |
+
+Both exclusions come from the p cap. Their PSR (0.88 and 0.90) would pass on its own: an edge measured over 17-20
+years of ETF data can be distinguishable from zero and still be beaten by a fair share of shuffled histories. The
+PSR cap is there for the other case, a lucky ranking among shuffles with an edge too small to tell from zero.
+
+These caps were set by the owner with the four cards above in view. They are a reading rule for the board, not a
+gate: they decide which rejected cards are worth free forward days, never a verdict. They apply to every card,
+including those judged under thresholds v2.
+
+The first daily report after this change lists `353323a3bd56` and `1335bb8e04b8` as moving from near-miss to
+rejected. The rule changed, not the cards.
 
 **Disclosure.** The rule comes from the M6 brief, but it was checked against the 18 existing cards before this record
 was written. Decision 0007 and the handoff called both trend-filter cards in the paper book "near-misses". By this
@@ -173,5 +206,5 @@ to the channels without the database. The job then exits 1, as it did before for
   N and p-values sit beside every state, so the board can't make a lucky card look validated.
 - Owner actions on the board go through existing paths with their audit trail: putting a card in the paper book
   (`POST /api/paper/entries`) and retiring one (with a required reason).
-- The first real report will list four near-misses and zero candidates. That is the honest state of the lab after 18
-  pre-registered candidates.
+- The first real report listed four near-misses and zero candidates. With the caps (§2) two remain, one of them in
+  the paper book. That is the honest state of the lab after 18 pre-registered candidates.

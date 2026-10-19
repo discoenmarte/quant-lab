@@ -118,7 +118,7 @@ flowchart LR
 | M3c | Breadth | Survivorship-free crypto cross-section (588 Binance USDT pairs, delisted ones included), point-in-time universes, drifting positions, four published crypto factor rules, a cross-sectional null, calibration study E and pre-registered verdicts ([decision 0006](docs/decisions/0006-crypto-cross-section.md)) | done |
 | M4 | Research inbox | arXiv feed, local-LLM triage and specs, replication checks | planned |
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
-| M6 | Registry and alerts | Lifecycle states for every card and a strict near-miss rule, a daily lab report from the ledger, cards, paper book, audit log and data freshness, four alert rules through a file, macOS and Telegram, the report at the end of the nightly job, Strategy Board ([decision 0008](docs/decisions/0008-registry-report-alerts.md)) | done |
+| M6 | Registry and alerts | Lifecycle states for every card and a strict near-miss rule (only the luck stages failed, p ≤ 0.10, PSR ≥ 0.80), a daily lab report from the ledger, cards, paper book, audit log and data freshness, four alert rules through a file, macOS and Telegram, the report at the end of the nightly job, Strategy Board ([decision 0008](docs/decisions/0008-registry-report-alerts.md)) | done |
 | M7a | Forward paper book | Daily targets recorded before the next bar exists, scored with the backtest engines against frozen research bands, a CUSUM decay alarm, a nightly job, Trading Desk ([decision 0007](docs/decisions/0007-forward-paper-book.md)) | done |
 | M7b | Broker paper trading | Broker paper accounts, real fills and reconciliation, kill switch | planned |
 | M8 | Go-live gate | Evidence checklist, limits outside any model | planned |

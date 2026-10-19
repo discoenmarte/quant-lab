@@ -275,13 +275,14 @@ universe.
   retirements (`registry_events`). Nothing is stored that could drift.
 - By precedence: in paper book, retired, validated, candidate, near-miss, rejected. The verdict is always shown
   beside the state.
-- **Near-miss:** rejected, and every failed stage is permutation or significance. On the real lab that is four cards:
-  - `d2c5a4b45b03` xs_low_vol:crypto_top30 (p 0.012, DSR 0.00)
-  - `c1c207ae352d` trend_filter:asset_classes_long, in the book (p 0.046)
-  - `353323a3bd56` xs_momentum:all_etfs (p 0.18)
-  - `1335bb8e04b8` risk_parity:asset_classes_long (p 0.29)
-- "Near" is about which stages failed, not by how much, so tiles show p and DSR. Whether to tighten the rule is an
-  open question for the owner (decision 0008 §2).
+- **Near-miss:** rejected, every failed stage is permutation or significance, and it missed by little: permutation
+  p ≤ 0.10 and undeflated PSR ≥ 0.80 (Sharpe > 0, N = 1, autocorrelation-adjusted, from the card's significance
+  chart). The caps are the owner's choice of 2026-10-19 (decision 0008 §2). On the real lab that leaves two cards:
+  - `d2c5a4b45b03` xs_low_vol:crypto_top30 (p 0.012, PSR 0.84, DSR 0.00)
+  - `c1c207ae352d` trend_filter:asset_classes_long, in the book (p 0.046, PSR 0.95)
+- `353323a3bd56` xs_momentum:all_etfs (p 0.18) and `1335bb8e04b8` risk_parity:asset_classes_long (p 0.29) were
+  near-misses under the first rule and are now rejected. The next daily report shows them moving; the rule changed,
+  not the cards. Tiles show p, DSR and (for cards rejected only at the luck stages) the PSR.
 - Actions on the board: put a card in the paper book (`POST /api/paper/entries`) and retire one with a reason
   (`qlab registry retire <card> --reason ...`). Retiring a card ends its active paper entry.
 
@@ -328,7 +329,7 @@ forward days):
 
 **Follow-ups worth doing:**
 
-1. Decide whether the near-miss rule should also bound p (decision 0008 §2), before the next batch.
+1. ~~Decide whether the near-miss rule should also bound p~~: done, p ≤ 0.10 and undeflated PSR ≥ 0.80.
 2. The allocator (HRP or risk parity with caps, a correlation heatmap) once something is validated.
 3. A two-way Telegram bot with M7b's kill switch (outbound only today).
 4. Something outside the lab that notices a nightly run that never happened.
@@ -363,7 +364,8 @@ re-judged. Batch `23275b56` would have had a luck threshold of about 0.5, and st
 **Follow-ups:**
 
 1. New cards can now pass significance where v2 cards couldn't, which feeds the near-miss rule (decision 0008 §2).
-   Read near-misses with the card's thresholds version.
+   Read near-misses with the card's thresholds version. The near-miss caps use the undeflated PSR, which doesn't
+   depend on the version.
 2. If the paper inbox or mining (M4, M5) mixes trials of different lengths on one scope, check that each trial's
    span reaches `evaluate` (`selection_days`). `judge_subject` and `judge_batch` already pass it.
 

@@ -581,12 +581,12 @@ def run(job_id: str, log: Callable[[str], None] = print, proposer: Any = None) -
         status = "stopped" if outcome.stopped == "stopped" else "done"
         _progress(rep, track, srch)
         _finish(rep, track, ref_results, ev)
-        if prop is not None and hasattr(prop, "rationales"):
-            rep["proposals"] = [{"strategy": k, "rationale": v} for k, v in prop.rationales.items()]
+        if prop is not None and hasattr(prop, "accepted"):
+            rep["proposals"] = [{k: a[k] for k in ("strategy", "params", "text", "rationale")} for a in prop.accepted]
             rep["outside"] = prop.outside
             rep["llm"] = {"calls": prop.calls, "rejected": prop.rejected, "model": prop.llm.model}
             for t in rep["top"]:
-                t["rationale"] = prop.rationales.get(t["strategy"])
+                t["rationale"] = prop.rationale_of(t["spec"])
         rep.update(status=status, stopped=outcome.stopped, finished_at=naive_utc().isoformat(timespec="seconds"),
                    message=f"{track.n} trials ({track.valid} scored); ended by {outcome.stopped}")
         _save(job_id, rep)

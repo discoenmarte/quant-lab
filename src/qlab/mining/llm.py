@@ -118,7 +118,8 @@ class Proposer:
     Attributes:
         llm: The provider (``qlab.inbox.llm``).
         scope_text: The scope in words.
-        rationales: Strategy name to rationale, for every accepted proposal.
+        accepted: Every accepted proposal: ``strategy``, ``params``, ``text``, ``rationale`` and ``key`` (the spec's
+            identity, ``search.key``).
         outside: Ideas the model couldn't express in the grammar.
         rejected: Count of proposals that failed validation.
         calls: Model calls made.
@@ -134,7 +135,7 @@ class Proposer:
         """
         self.llm = llm or models.provider()
         self.scope_text, self.hint = scope_text, hint
-        self.rationales: dict[str, str] = {}
+        self.accepted: list[dict[str, Any]] = []
         self.outside: list[str] = []
         self.rejected = 0
         self.calls = 0
@@ -171,6 +172,18 @@ class Proposer:
         triage.log_call("mining", answer, self.llm, answer.seconds, True)
         return answer.data
 
+    def rationale_of(self, spec: dict[str, Any]) -> str | None:
+        """The rationale given with a spec, if the model proposed it.
+
+        Args:
+            spec: A normalised spec.
+
+        Returns:
+            The rationale, or None.
+        """
+        k = json.dumps(spec, sort_keys=True)
+        return next((a["rationale"] for a in self.accepted if a["key"] == k), None)
+
     def propose(self, space: Space, n: int) -> list[tuple[dict[str, Any], str]]:
         """Up to ``n`` valid proposals, retrying once with the reasons for any that were rejected.
 
@@ -199,8 +212,9 @@ class Proposer:
                     self.rejected += 1
                     errors.append(f"proposal {i + 1}: {err}")
                     continue
-                name = grammar.split(spec, space)[0]
-                self.rationales.setdefault(name, why)
+                name, _, params = grammar.split(spec, space)
+                self.accepted.append({"strategy": name, "params": params, "text": grammar.describe(spec),
+                                      "rationale": why, "key": json.dumps(spec, sort_keys=True)})
                 self._shown.append(grammar.describe(spec))
                 out.append((spec, why))
             self.outside += [str(x)[:300] for x in (data.get("outside") or []) if isinstance(x, str)][:10]

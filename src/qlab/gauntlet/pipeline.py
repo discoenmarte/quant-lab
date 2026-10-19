@@ -44,7 +44,8 @@ from .nulls import stationary_bootstrap
 from .pbo import pbo
 from .subjects import BarSubject, PanelSubject, days_per_year, subject_from_meta, to_daily
 
-__all__ = ["STAGES", "days_per_year", "to_daily", "evaluate", "judge", "run_gauntlet", "run_portfolio_gauntlet"]
+__all__ = ["STAGES", "days_per_year", "to_daily", "deflate", "evaluate", "judge", "run_gauntlet",
+           "run_portfolio_gauntlet"]
 
 STAGES = [
     ("leakage", "Look-ahead"),
@@ -227,6 +228,35 @@ def crisis_windows(bench: pd.Series, n: int = 3) -> list[tuple[pd.Timestamp, pd.
         out.append((peak, trough, float(dd[trough])))
         free[peak:end] = False
     return out
+
+
+def deflate(cand_e: np.ndarray, trial_sr: np.ndarray, dpy: int, method: str) -> dict[str, Any]:
+    """Deflated Sharpe of a candidate's daily edge against the trials it was chosen from.
+
+    Args:
+        cand_e: Daily edge returns of the candidate.
+        trial_sr: Annual edge Sharpes of every trial counted, the candidate included.
+        dpy: Days per year (252 or 365).
+        method: How the spread of the trial Sharpes is estimated (``stats.VARIANCE_METHODS``).
+
+    Returns:
+        The output of ``stats.dsr`` plus ``n_trials``, ``var_method``, ``var_annual`` (the V used),
+        ``var_sample_annual`` (the plain sample variance) and ``luck_var_annual`` (the sampling variance of one
+        Sharpe estimate with no edge), variances in annual Sharpe units squared.
+
+    Raises:
+        ValueError: Unknown method.
+    """
+    x = np.asarray(trial_sr, dtype=float)
+    x = x[np.isfinite(x)]
+    skew, kurt, rho = stats.moments(cand_e)
+    luck = stats.sr_variance(0.0, int(np.isfinite(cand_e).sum()), skew, kurt, rho)
+    luck = luck if math.isfinite(luck) else math.inf
+    var_daily = stats.trial_variance(x / math.sqrt(dpy), method, luck)
+    n_trials = max(len(x), 1)
+    return {**stats.dsr(cand_e, n_trials, var_daily), "n_trials": n_trials, "var_method": method,
+            "var_annual": var_daily * dpy, "var_sample_annual": stats.trial_variance(x),
+            "luck_var_annual": luck * dpy}
 
 
 def _ok(x: float | None) -> bool:
@@ -461,22 +491,24 @@ def evaluate(
 
     # 7. Selection: the luck threshold after every trial on this instrument, overfitting of the parameter
     # choice, and the chance this is a false discovery.
-    n_trials = max(len(trial_sr), 1)
-    var_daily = float(np.var(trial_sr, ddof=1)) / dpy if len(trial_sr) > 1 else 0.0
-    d = stats.dsr(cand_e, n_trials, var_daily)
+    d = deflate(cand_e, trial_sr, dpy, str(th.get("dsr_variance", thresholds.LEGACY["dsr_variance"])))
+    n_trials = d["n_trials"]
     p = pbo(np.nan_to_num(E)) if len(grid) > 1 else {"pbo": float("nan"), "logits": [], "is_sharpe": [],
                                                       "oos_sharpe": [], "n_splits": 0}
     fdr = stats.false_discovery(d["sr"], th["fdr_sr1"] / math.sqrt(dpy), d["n"], th["fdr_prior"], d["skew"],
                                 d["kurt"], d["rho"])
     mintrl = stats.min_track_record(d["sr"], 0.0, d["skew"], d["kurt"], d["rho"]) / dpy
     values.update(dsr=d["dsr"], pbo=p["pbo"], fdr=fdr)
+    narrowed = d["var_annual"] < d["var_sample_annual"] - 1e-12
     stages.append(Stage(
         "significance", "Deflated Sharpe & PBO", None, d["dsr"],
         f"DSR >= {th['dsr_min']}" + (f" and PBO <= {th['pbo_max']}" if th["pbo_max"] < 1 else " (PBO reported)"),
         f"DSR {_f(d['dsr'], '{:.3f}')} after N = {n_trials} trials on this instrument (luck alone reaches an edge "
-        f"Sharpe of {_f(_ann(d['sr0'], dpy))}); PBO {_f(p['pbo'])}; chance it's a false discovery "
-        f"{_f(fdr, '{:.0%}')}.",
-        {**d, "n_trials": n_trials, "sr_annual": _ann(d["sr"], dpy), "sr0_annual": _ann(d["sr0"], dpy),
+        f"Sharpe of {_f(_ann(d['sr0'], dpy))}"
+        + (f"; trial Sharpes spread {math.sqrt(d['var_annual']):.2f} by the {d['var_method']} estimate, "
+           f"{math.sqrt(d['var_sample_annual']):.2f} as a plain standard deviation" if narrowed else "")
+        + f"); PBO {_f(p['pbo'])}; chance it's a false discovery {_f(fdr, '{:.0%}')}.",
+        {**d, "sr_annual": _ann(d["sr"], dpy), "sr0_annual": _ann(d["sr0"], dpy),
          "trial_sharpes": np.round(trial_sr, 4).tolist()[:5000], "pbo": p["pbo"], "logits": p["logits"],
          "is_sharpe": p["is_sharpe"], "oos_sharpe": p["oos_sharpe"], "fdr": fdr, "fdr_prior": th["fdr_prior"],
          "fdr_sr1": th["fdr_sr1"], "min_track_record_years": mintrl},

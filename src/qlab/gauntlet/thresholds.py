@@ -25,6 +25,7 @@ from typing import Any
 from .. import audit, db
 from ..lockbox import DEFAULT_FROM
 from ..timeutil import naive_utc
+from .stats import VARIANCE_METHODS
 
 DEFAULT: dict[str, Any] = {
     "lockbox_from": DEFAULT_FROM,  # first sealed date for the whole lab (ISO date)
@@ -44,7 +45,12 @@ DEFAULT: dict[str, Any] = {
     "regime_min_share": 0.6,       # regimes: share of regimes with a positive net return
     "max_corr": 0.5,               # diversification: correlation to the validated portfolio
     "grid_max": 300,               # parameter grid: most configurations evaluated per run
+    "dsr_variance": "sample",      # significance: how the spread of trial Sharpes is estimated (see stats)
 }
+
+# Values that reproduce how versions saved before a key existed judged. A key missing from a stored version takes
+# its legacy value here, not today's default, so adding a key never changes an earlier version.
+LEGACY: dict[str, Any] = {"dsr_variance": "sample"}
 
 
 def _validate(key: str, value: Any) -> None:
@@ -55,11 +61,15 @@ def _validate(key: str, value: Any) -> None:
         value: Proposed value.
 
     Raises:
-        ValueError: Unknown key, a non-number, or a ``lockbox_from`` that isn't an ISO date.
+        ValueError: Unknown key, a non-number, a ``lockbox_from`` that isn't an ISO date, or an unknown
+            variance method.
     """
     if key not in DEFAULT:
         raise ValueError(f"unknown threshold: {key}")
-    if key == "lockbox_from":
+    if key == "dsr_variance":
+        if value not in VARIANCE_METHODS:
+            raise ValueError(f"dsr_variance must be one of {', '.join(VARIANCE_METHODS)}")
+    elif key == "lockbox_from":
         try:
             date.fromisoformat(str(value))
         except ValueError as err:
@@ -72,11 +82,12 @@ def current() -> tuple[int, dict[str, Any]]:
     """The thresholds in force, creating version 1 from the defaults on first use.
 
     Returns:
-        ``(version, thresholds)``. Keys added to ``DEFAULT`` after a version was saved take their default.
+        ``(version, thresholds)``. Keys added to ``DEFAULT`` after a version was saved take their ``LEGACY``
+        value if they have one, otherwise their default.
     """
     rows = db.rows("SELECT version, config FROM thresholds ORDER BY version DESC LIMIT 1")
     if rows:
-        return int(rows[0]["version"]), {**DEFAULT, **json.loads(rows[0]["config"])}
+        return int(rows[0]["version"]), {**DEFAULT, **LEGACY, **json.loads(rows[0]["config"])}
     with db.connect() as con:
         con.execute(
             "INSERT INTO thresholds (version, created_at, reason, config) VALUES (1, ?, ?, ?) ON CONFLICT DO NOTHING",

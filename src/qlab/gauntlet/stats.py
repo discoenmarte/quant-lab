@@ -134,6 +134,57 @@ def expected_max_sharpe(n_trials: int, var_sr: float) -> float:
     return float(math.sqrt(var_sr) * ((1.0 - EULER_GAMMA) * a + EULER_GAMMA * b))
 
 
+VARIANCE_METHODS = ("sample", "upper_half", "mad", "luck_bound")
+# Small-sample factors that make (1.4826 · MAD)² unbiased for a normal variance, by simulation (300,000 samples
+# each); from 10 trials on, n / (n − 0.6) is within 1% of the simulated factor.
+_MAD_FACTOR = {2: 0.909, 3: 1.318, 4: 1.395, 5: 1.103, 6: 1.154, 7: 1.055, 8: 1.086, 9: 1.034}
+
+
+def trial_variance(sr: np.ndarray | list[float], method: str = "sample", luck: float = math.inf) -> float:
+    """Variance of Sharpe ratios across trials, the ``V`` of the Deflated Sharpe, estimated by ``method``.
+
+    The expected maximum of N lucky trials depends on how widely luck spreads their Sharpes. A trial whose Sharpe
+    is far below the others, for example one that trades daily and pays its costs every day, can never be the
+    maximum, but it widens the sample variance. The methods differ in how much such a trial counts:
+
+    - ``sample``: the sample variance (ddof 1). Every trial counts fully.
+    - ``upper_half``: the mean squared distance above the median, ``2 Σ_{x > m} (x − m)² / (N − 1)``. For a
+      symmetric spread it estimates the variance (nearly unbiased from N = 2); trials below the median only move
+      the median.
+    - ``mad``: ``(1.4826 · MAD)²`` with a small-sample factor. Ignores outliers in both tails.
+    - ``luck_bound``: the sample variance, but no more than ``luck``, the sampling variance of one Sharpe
+      estimate with no edge. N trials without skill can't spread wider than independent ones do, so any extra
+      spread comes from real differences between the trials, such as their costs.
+
+    Args:
+        sr: Sharpe ratios of the trials, all in the same units (per period or annual).
+        method: One of ``VARIANCE_METHODS``.
+        luck: Sampling variance of a single Sharpe estimate under the null, in the units of ``sr`` squared. Used
+            by ``luck_bound`` only; infinity means no bound.
+
+    Returns:
+        The variance; 0 with fewer than two finite Sharpes.
+
+    Raises:
+        ValueError: Unknown method.
+    """
+    if method not in VARIANCE_METHODS:
+        raise ValueError(f"unknown variance method {method!r}; use one of {', '.join(VARIANCE_METHODS)}")
+    x = np.asarray(sr, dtype=float)
+    x = x[np.isfinite(x)]
+    n = len(x)
+    if n < 2:
+        return 0.0
+    if method == "upper_half":
+        m = float(np.median(x))
+        return float(2.0 * np.sum((x[x > m] - m) ** 2) / (n - 1))
+    if method == "mad":
+        mad = float(np.median(np.abs(x - np.median(x))))
+        return float((1.4826 * mad) ** 2 * _MAD_FACTOR.get(n, n / (n - 0.6)))
+    v = float(np.var(x, ddof=1))
+    return min(v, luck) if method == "luck_bound" and math.isfinite(luck) else v
+
+
 def dsr(r: np.ndarray | pd.Series, n_trials: int, var_sr: float) -> dict[str, float]:
     """Deflated Sharpe Ratio: PSR against the best Sharpe expected from luck after ``n_trials``.
 

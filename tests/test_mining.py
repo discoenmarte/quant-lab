@@ -397,7 +397,7 @@ def test_miner_researcher_runs_the_unchanged_gauntlet():
             "trend": 0.0, "seed": 31, "budget": 40, "th": th}
     r = mcal.mine_one(task)
     assert r["mined"]["n_trials"] == 40 and isinstance(r["admitted"], bool)
-    assert r["dsr_inputs"]["n_trials"] == r["mined"]["n_valid"]
+    assert r["dsr_inputs"]["n_trials"] == 2 * r["mined"]["n_valid"]  # mined trials count twice (thresholds v5)
     assert len(r["miner_records"]) == 40
     rep = {"thresholds": th, "runs": [r]}
     loose = mcal.rejudge(rep, {"dsr_min": 0.0})
@@ -462,7 +462,8 @@ def test_mining_n_factor_weights_mined_trials_only():
     """The factor multiplies mined trials in N and nothing else; versions without the key count each trial once."""
     from qlab.gauntlet import pipeline, stats
 
-    assert thresholds.current()[1]["mining_n_factor"] == 1.0
+    assert thresholds.current()[1]["mining_n_factor"] == 2.0  # fresh labs start from thresholds v5's value
+    assert thresholds.LEGACY["mining_n_factor"] == 1.0  # versions saved before the key count each trial once
     with pytest.raises(ValueError, match="at least 1"):
         thresholds.update({"mining_n_factor": 0.5}, "too small")
     th = {"mining_n_factor": 3.0}
@@ -480,7 +481,7 @@ def test_mining_n_factor_weights_mined_trials_only():
 
 def test_a_mined_card_counts_mined_trials_by_the_factor(spy):
     """With the factor in force, a job's luck line and a mined card's N count each mined trial that many times."""
-    thresholds.update({**FAST, "mining_n_factor": 2.0}, "count mined trials twice")
+    thresholds.update(FAST, "fast tests")
     rep = jobs.run(jobs.create(spy, "random", 40, 5, workers=1)["job_id"], log=lambda m: None)
     scored = rep["progress"]["n_valid"]
     assert rep["progress"]["N"] == 2 * scored

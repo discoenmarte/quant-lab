@@ -27,6 +27,12 @@ noise candidates fixed in advance on single instruments and portfolios, which dr
 beat a falling index without making money. The costs stage still requires a positive net CAGR. In two studies on
 separate seeds (3,760 noise runs) the edge basis kept every noise family at or below 5%, admitted 0.80% of noise
 against 0.82%, and caught a single-instrument trend edge of 1.0 a few points more often.
+
+Version 5 counts each mined trial twice in the Deflated Sharpe's N (``mining_n_factor``, decision 0011). Bayesian and
+genetic search on eight-asset panels passed noise 10% and 7.5% of the time at mining scale (study M1); the winners'
+true edges on long noise markets were near zero, so it was luck that the search found faster than its count of
+trials allowed. Counting mined trials twice kept every family at or below 5% in M1 and in a confirmation on fresh
+seeds (M2).
 """
 
 from __future__ import annotations
@@ -60,7 +66,7 @@ DEFAULT: dict[str, Any] = {
     "grid_max": 300,               # parameter grid: most configurations evaluated per run
     "dsr_variance": "luck_max",    # significance: how the spread of trial Sharpes is estimated (see stats)
     "regime_basis": "edge",        # regimes: judge the edge over the passive alternative or the net return
-    "mining_n_factor": 1.0,        # significance: each mined trial counts this many times in N (decision 0011)
+    "mining_n_factor": 2.0,        # significance: each mined trial counts this many times in N (decision 0011)
 }
 REGIME_BASES = ("edge", "net")
 

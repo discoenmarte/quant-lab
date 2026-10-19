@@ -146,6 +146,19 @@ SCHEMA = [
         reason VARCHAR,
         actor VARCHAR
     )""",
+    # M6: one row per daily report; the report itself is JSON under reports/daily. ``states`` and ``conditions`` are
+    # what the next report compares against to find changes worth an alert.
+    """CREATE TABLE IF NOT EXISTS daily_reports (
+        report_id VARCHAR PRIMARY KEY,
+        created_at TIMESTAMP,
+        since TIMESTAMP,
+        trigger VARCHAR,
+        headline VARCHAR,
+        n_alerts INTEGER,
+        states VARCHAR,
+        conditions VARCHAR,
+        path VARCHAR
+    )""",
     # M6: every alert raised, with what each channel did with it.
     """CREATE TABLE IF NOT EXISTS alerts (
         alert_id VARCHAR PRIMARY KEY,

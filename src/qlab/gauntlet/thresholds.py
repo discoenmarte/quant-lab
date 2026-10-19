@@ -20,6 +20,13 @@ addendum). The sample variance let real differences between trials, such as a da
 threshold: in pre-registered crypto batches on noise it reached an edge Sharpe of 1.7-2.7, and planted edges
 inside a batch were almost never caught. ``luck_max`` caps the spread at the widest luck can produce. In two
 studies on separate seeds it kept every noise family at or below 2.5% and more than doubled the power in batches.
+
+Version 4 makes the regimes stage judge the edge over the passive alternative in each regime instead of the net return
+(``regime_basis``, decision 0004 addendum). On the net return the stage mostly measured the market: it passed 55-95% of
+noise candidates fixed in advance on single instruments and portfolios, which drift upwards, and it blocked edges that
+beat a falling index without making money. The costs stage still requires a positive net CAGR. In two studies on
+separate seeds (3,760 noise runs) the edge basis kept every noise family at or below 5%, admitted 0.80% of noise
+against 0.82%, and caught a single-instrument trend edge of 1.0 a few points more often.
 """
 
 from __future__ import annotations
@@ -52,7 +59,7 @@ DEFAULT: dict[str, Any] = {
     "max_corr": 0.5,               # diversification: correlation to the validated portfolio
     "grid_max": 300,               # parameter grid: most configurations evaluated per run
     "dsr_variance": "luck_max",    # significance: how the spread of trial Sharpes is estimated (see stats)
-    "regime_basis": "net",         # regimes: judge the edge over the passive alternative or the net return
+    "regime_basis": "edge",        # regimes: judge the edge over the passive alternative or the net return
 }
 REGIME_BASES = ("edge", "net")
 

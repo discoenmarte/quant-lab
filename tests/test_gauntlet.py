@@ -133,8 +133,8 @@ def test_judge_uses_thresholds_only():
     """The same measurements pass or fail depending only on the thresholds."""
     _, th = thresholds.current()
     v = {"leak": 1.0, "edge": 0.4, "net_cagr": 0.05, "wf_oos": 0.3, "wf_ratio": 0.6, "plateau": 0.8,
-         "perm_p": 0.004, "dsr": 0.97, "pbo": 0.1, "regime_share": 0.75, "div_corr": float("nan"),
-         "div_gain": float("nan")}
+         "perm_p": 0.004, "dsr": 0.97, "pbo": 0.1, "regime_share": 0.75, "regime_edge_share": 0.75,
+         "div_corr": float("nan"), "div_gain": float("nan")}
     verdict = pipeline.judge(v, th)
     assert all(x is not False for x in verdict.values())
     assert pipeline.judge({**v, "perm_p": 0.02}, {**th, "perm_max_p": 0.01})["permutation"] is False
@@ -326,7 +326,8 @@ def test_variance_study_compares_every_method_on_the_same_runs(fast_thresholds):
 
 
 def test_regimes_judge_the_net_return_or_the_edge_as_the_thresholds_say():
-    """Versions saved before ``regime_basis`` judge the net return in each regime; a version can choose the edge."""
+    """A fresh lab judges the edge in each regime (thresholds v4); versions saved before ``regime_basis`` judge the
+    net return; a version can choose either."""
     _, th = thresholds.current()
     v = {"leak": 1.0, "edge": 0.4, "net_cagr": 0.05, "wf_oos": 0.3, "wf_ratio": 0.6, "plateau": 0.8,
          "perm_p": 0.004, "dsr": 0.97, "pbo": 0.1, "regime_share": 0.25, "regime_edge_share": 0.75,
@@ -336,7 +337,7 @@ def test_regimes_judge_the_net_return_or_the_edge_as_the_thresholds_say():
     assert pipeline.regime_basis({k: x for k, x in th.items() if k != "regime_basis"}) == "net"
     with pytest.raises(ValueError, match="regime_basis must be one of"):
         thresholds.update({"regime_basis": "raw"}, "typo")
-    assert thresholds.current()[1]["regime_basis"] == thresholds.DEFAULT["regime_basis"]
+    assert thresholds.current()[1]["regime_basis"] == thresholds.DEFAULT["regime_basis"] == "edge"
     thresholds.update({"regime_basis": "net"}, "test")
     assert thresholds.current()[1]["regime_basis"] == "net"
 

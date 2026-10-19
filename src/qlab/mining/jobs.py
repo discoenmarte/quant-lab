@@ -380,7 +380,8 @@ class _Tracker:
     """
 
     def __init__(self, prior: list[float], n_days: int, dpy: int, method: str,
-                 prior_len: list[float] | None = None) -> None:
+                 prior_len: list[float] | None = None, prior_w: list[float] | None = None,
+                 factor: float = 1.0) -> None:
         """Start tracking.
 
         Args:
@@ -390,10 +391,14 @@ class _Tracker:
             method: Spread method of the thresholds in force (``dsr_variance``).
             prior_len: Each prior trial's calendar span as a multiple of the job's, aligned with ``prior``; None
                 means the same span. A shorter trial spreads wider by luck (decision 0004 addendum).
+            prior_w: How many trials each prior one counts as in N (``pipeline.trial_weights``); None means one.
+            factor: How many trials each of this job's counts as (``mining_n_factor``).
         """
         keep = [i for i, x in enumerate(prior) if x is not None and math.isfinite(x)]
         self.prior = [prior[i] for i in keep]
         self.prior_len = [prior_len[i] for i in keep] if prior_len is not None else [1.0] * len(keep)
+        self.prior_w = [prior_w[i] for i in keep] if prior_w is not None else [1.0] * len(keep)
+        self.factor = factor
         self.edges: list[float] = []
         self.gross: list[float] = []
         self.top: list[Result] = []
@@ -414,8 +419,8 @@ class _Tracker:
             reaches 0.95).
         """
         x = np.asarray(self.prior + self.edges, dtype=float)
-        n = len(x)
-        v = stats.trial_variance(x, self.method, self.luck_ann) if n > 1 else 0.0
+        v = stats.trial_variance(x, self.method, self.luck_ann) if len(x) > 1 else 0.0
+        n = int(round(sum(self.prior_w) + self.factor * len(self.edges)))
         sr0 = stats.expected_max_sharpe(n, v)
         return {"N": n, "sr0": sr0, "bar": sr0 + Z95 * math.sqrt(self.luck_ann)}
 
@@ -558,7 +563,8 @@ def run(job_id: str, log: Callable[[str], None] = print, proposer: Any = None) -
             return rep
         span = (pd.Timestamp(ev.research[1]) - pd.Timestamp(ev.research[0])).days + 1
         track = _Tracker([t["edge_sharpe"] for t in prior], ev.n_days, ev.dpy, method,
-                         [_days(t) / span for t in prior])
+                         [_days(t) / span for t in prior], pipeline.trial_weights([t["strategy"] for t in prior], th),
+                         float(th.get("mining_n_factor", thresholds.LEGACY["mining_n_factor"])))
         last_save = [time.monotonic()]
         live: dict[str, Any] = {"search": None}
 
@@ -673,6 +679,7 @@ def _finish(rep: dict[str, Any], track: _Tracker, refs: list[Result], ev: Evalua
     """
     trial_sr = np.asarray(track.prior + track.edges, dtype=float)
     length = np.asarray(track.prior_len + [1.0] * len(track.edges), dtype=float)
+    weight = np.asarray(track.prior_w + [track.factor] * len(track.edges), dtype=float)
     ref_daily = [(r.spec["signal"]["rule"], r.daily_edge) for r in refs if r.ok and r.daily_edge is not None]
     kept: list[Result] = []
     for r in track.top:
@@ -682,7 +689,7 @@ def _finish(rep: dict[str, Any], track: _Tracker, refs: list[Result], ev: Evalua
             break
     top = []
     for r in kept:
-        d = pipeline.deflate(r.daily_edge.astype(float), trial_sr, ev.dpy, track.method, length)
+        d = pipeline.deflate(r.daily_edge.astype(float), trial_sr, ev.dpy, track.method, length, weight)
         corrs = [(name, _corr(r.daily_edge, e)) for name, e in ref_daily]
         corrs = [(n, c) for n, c in corrs if math.isfinite(c)]
         close = max(corrs, key=lambda x: abs(x[1])) if corrs else (None, float("nan"))

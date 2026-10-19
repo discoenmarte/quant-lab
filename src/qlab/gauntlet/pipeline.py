@@ -238,7 +238,7 @@ def crisis_windows(bench: pd.Series, n: int = 3) -> list[tuple[pd.Timestamp, pd.
 
 
 def deflate(cand_e: np.ndarray, trial_sr: np.ndarray, dpy: int, method: str,
-            length: np.ndarray | None = None) -> dict[str, Any]:
+            length: np.ndarray | None = None, weight: np.ndarray | None = None) -> dict[str, Any]:
     """Deflated Sharpe of a candidate's daily edge against the trials it was chosen from.
 
     Args:
@@ -249,9 +249,12 @@ def deflate(cand_e: np.ndarray, trial_sr: np.ndarray, dpy: int, method: str,
         length: Each trial's history length as a multiple of the candidate's, aligned with ``trial_sr``. None
             means every trial covers the candidate's period. A shorter history spreads its Sharpe wider by luck,
             so the luck variance is the mean of the candidate's divided by each length.
+        weight: How many trials each one counts as in N, aligned with ``trial_sr``. None means one each. Mined
+            trials count ``mining_n_factor`` times (decision 0011): adaptive search finds more than its count of
+            independent trials would. The spread of the Sharpes uses each trial once.
 
     Returns:
-        The output of ``stats.dsr`` plus ``n_trials``, ``var_method``, ``var_annual`` (the V used),
+        The output of ``stats.dsr`` plus ``n_trials`` (weighted), ``var_method``, ``var_annual`` (the V used),
         ``var_sample_annual`` (the plain sample variance) and ``luck_var_annual`` (the sampling variance of one
         Sharpe estimate with no edge, averaged over the trials), variances in annual Sharpe units squared.
 
@@ -269,6 +272,8 @@ def deflate(cand_e: np.ndarray, trial_sr: np.ndarray, dpy: int, method: str,
     luck = luck if math.isfinite(luck) else math.inf
     var_daily = stats.trial_variance(x / math.sqrt(dpy), method, luck)
     n_trials = max(len(x), 1)
+    if weight is not None and len(x):
+        n_trials = max(int(round(float(np.sum(np.asarray(weight, dtype=float)[keep])))), 1)
     return {**stats.dsr(cand_e, n_trials, var_daily), "n_trials": n_trials, "var_method": method,
             "var_annual": var_daily * dpy, "var_sample_annual": stats.trial_variance(x),
             "luck_var_annual": luck * dpy}
@@ -344,6 +349,7 @@ def evaluate(
     portfolio: pd.Series | None = None,
     seed: int = 7,
     selection_days: list[float] | None = None,
+    selection_weight: list[float] | None = None,
 ) -> dict[str, Any]:
     """Judge a candidate on the research period. Pure: reads and writes nothing.
 
@@ -362,6 +368,8 @@ def evaluate(
         seed: Seed for the grid fill, permutations and bootstrap.
         selection_days: Calendar days each trial in ``selection`` covers, aligned with it. None means every trial
             covers the candidate's research period.
+        selection_weight: How many trials each one in ``selection`` counts as in N, aligned with it. None means one
+            each. A candidate added to the selection counts ``mining_n_factor`` times when it is mined.
 
     Returns:
         ``stages`` (list of ``Stage``), ``failed_stage``, ``research`` (first and last date), ``grid``,
@@ -401,6 +409,11 @@ def evaluate(
         m = metrics.summary(pd.Series(R[:, k]), pd.Series(rf_d), dpy, benchmark=pd.Series(bench))
         records.append({"params": cfg, "start": research[0], "end": research[1], "metrics": m})
     trial_sr = np.asarray(list(selection or []) + ([] if candidate_counted else [cand_edge]), dtype=float)
+    trial_w = None
+    if selection_weight is not None:
+        own = float(th.get("mining_n_factor", 1.0)) if subject.family == MINED_FAMILY else 1.0
+        trial_w = np.asarray(list(selection_weight) + ([] if candidate_counted else [own]), dtype=float)
+        trial_w = trial_w[np.isfinite(trial_sr)]
     trial_len = None
     if selection_days is not None:
         span = (pd.Timestamp(research[1]) - pd.Timestamp(research[0])).days + 1
@@ -532,8 +545,10 @@ def evaluate(
 
     # 7. Selection: the luck threshold after every trial on this instrument, overfitting of the parameter
     # choice, and the chance this is a false discovery.
-    d = deflate(cand_e, trial_sr, dpy, str(th.get("dsr_variance", thresholds.LEGACY["dsr_variance"])), trial_len)
+    d = deflate(cand_e, trial_sr, dpy, str(th.get("dsr_variance", thresholds.LEGACY["dsr_variance"])), trial_len,
+                trial_w)
     n_trials = d["n_trials"]
+    weighted = trial_w is not None and n_trials != len(trial_sr)
     p = pbo(np.nan_to_num(E)) if len(grid) > 1 else {"pbo": float("nan"), "logits": [], "is_sharpe": [],
                                                       "oos_sharpe": [], "n_splits": 0}
     fdr = stats.false_discovery(d["sr"], th["fdr_sr1"] / math.sqrt(dpy), d["n"], th["fdr_prior"], d["skew"],
@@ -544,7 +559,9 @@ def evaluate(
     stages.append(Stage(
         "significance", "Deflated Sharpe & PBO", None, d["dsr"],
         f"DSR >= {th['dsr_min']}" + (f" and PBO <= {th['pbo_max']}" if th["pbo_max"] < 1 else " (PBO reported)"),
-        f"DSR {_f(d['dsr'], '{:.3f}')} after N = {n_trials} trials on this instrument (luck alone reaches an edge "
+        f"DSR {_f(d['dsr'], '{:.3f}')} after N = {n_trials} trials on this instrument"
+        + (f" (each mined trial counts {th.get('mining_n_factor', 1.0):g} times)" if weighted else "")
+        + " (luck alone reaches an edge "
         f"Sharpe of {_f(_ann(d['sr0'], dpy))}"
         + ("; " + SPREAD_NOTE[d["var_method"]].format(used=math.sqrt(d["var_annual"]),
                                                        plain=math.sqrt(d["var_sample_annual"])) if narrowed else "")
@@ -686,6 +703,7 @@ def judge_subject(
     selection: list[float] | None = None,
     batch: str | None = None,
     selection_days: list[float] | None = None,
+    selection_weight: list[float] | None = None,
 ) -> dict[str, Any]:
     """Run the gauntlet on a subject, record its grid as trials, and save the report card.
 
@@ -702,6 +720,8 @@ def judge_subject(
         batch: Pre-registered batch id, recorded on the card.
         selection_days: Calendar days each trial in ``selection`` covers. None means the candidate's research
             period.
+        selection_weight: How many trials each one in ``selection`` counts as (``trial_weights``). None means one
+            each.
 
     Returns:
         The report card: ``card_id``, ``verdict`` (``candidate`` or ``rejected``), ``failed_stage``, the
@@ -719,12 +739,14 @@ def judge_subject(
         counted = any((t["strategy"], t["params"], t["start"], t["end"]) == cand_key for t in prior)
         selection = [t["edge_sharpe"] for t in prior]
         selection_days = [_span(t) for t in prior]
+        selection_weight = trial_weights([t["strategy"] for t in prior], th)
     else:
         counted = True
 
     started = time.perf_counter()
     out = evaluate(subject, cand_params, th=th, selection=selection, candidate_counted=counted,
-                   portfolio=validated_portfolio(subject.question), seed=seed, selection_days=selection_days)
+                   portfolio=validated_portfolio(subject.question), seed=seed, selection_days=selection_days,
+                   selection_weight=selection_weight)
     ledger.record_trials([
         {**r, "question": subject.question, "family": subject.family, "strategy": subject.strategy,
          "symbol": subject.scope, "source": "gauntlet", "data_hash": subject.data_hash} for r in out["records"]
@@ -785,6 +807,7 @@ def judge_batch(
     plan = [{"question": s.question, "params": _complete(s.strat, p)} for s, p in entries]
     audit.log("gauntlet.preregister", target=batch, actor=actor, reason=note, details={"candidates": plan})
     prior = {(s.scope, s.interval): ledger.selection_set(s.scope, s.interval) for s, _ in entries}
+    _, th_now = thresholds.current()
     edges: dict[tuple[str, str], list[float]] = {}
     days: dict[tuple[str, str], list[float]] = {}
     for (s, _), item in zip(entries, plan, strict=True):
@@ -795,9 +818,32 @@ def judge_batch(
     cards = []
     for (s, p) in entries:
         key = (s.scope, s.interval)
+        own = trial_weights([e.strategy for e, _ in entries if (e.scope, e.interval) == key], th_now)
         cards.append(judge_subject(s, p, seed, actor, selection=[t["edge_sharpe"] for t in prior[key]] + edges[key],
-                                   batch=batch, selection_days=[_span(t) for t in prior[key]] + days[key]))
+                                   batch=batch, selection_days=[_span(t) for t in prior[key]] + days[key],
+                                   selection_weight=trial_weights([t["strategy"] for t in prior[key]], th_now) + own))
     return cards
+
+
+MINED_FAMILY = "mined"
+MINED_PREFIX = "mined_"
+
+
+def trial_weights(strategies: list[str], th: dict[str, Any]) -> list[float]:
+    """How many trials each one counts as in the Deflated Sharpe's N: mined ones ``mining_n_factor`` times.
+
+    Calibration at mining scale (decision 0011) found adaptive search on portfolios passing noise more often than
+    its count of trials allows; counting each mined trial more than once restores the bound.
+
+    Args:
+        strategies: Strategy names of the trials, ``mined_...`` for mined ones.
+        th: Thresholds.
+
+    Returns:
+        One weight per trial.
+    """
+    k = float(th.get("mining_n_factor", thresholds.LEGACY["mining_n_factor"]))
+    return [k if str(s).startswith(MINED_PREFIX) else 1.0 for s in strategies]
 
 
 def _span(trial: dict[str, Any]) -> float:

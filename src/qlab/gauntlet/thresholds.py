@@ -60,12 +60,13 @@ DEFAULT: dict[str, Any] = {
     "grid_max": 300,               # parameter grid: most configurations evaluated per run
     "dsr_variance": "luck_max",    # significance: how the spread of trial Sharpes is estimated (see stats)
     "regime_basis": "edge",        # regimes: judge the edge over the passive alternative or the net return
+    "mining_n_factor": 1.0,        # significance: each mined trial counts this many times in N (decision 0011)
 }
 REGIME_BASES = ("edge", "net")
 
 # Values that reproduce how versions saved before a key existed judged. A key missing from a stored version takes
 # its legacy value here, not today's default, so adding a key never changes an earlier version.
-LEGACY: dict[str, Any] = {"dsr_variance": "sample", "regime_basis": "net"}
+LEGACY: dict[str, Any] = {"dsr_variance": "sample", "regime_basis": "net", "mining_n_factor": 1.0}
 
 
 def _validate(key: str, value: Any) -> None:
@@ -87,6 +88,9 @@ def _validate(key: str, value: Any) -> None:
     elif key == "regime_basis":
         if value not in REGIME_BASES:
             raise ValueError(f"regime_basis must be one of {', '.join(REGIME_BASES)}")
+    elif key == "mining_n_factor":
+        if isinstance(value, bool) or not isinstance(value, int | float) or value < 1:
+            raise ValueError("mining_n_factor must be a number of at least 1")
     elif key == "lockbox_from":
         try:
             date.fromisoformat(str(value))

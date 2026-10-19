@@ -134,11 +134,13 @@ def mine_one(task: dict[str, Any]) -> dict[str, Any]:
                 "mined": {"n_trials": out.n_trials, "n_valid": 0}}
     best = out.best
     subject = subject_of(task["market"], data, best.spec, ev.space)
-    res = cal._finish(task, subject, best.params, [r.edge for r in valid], [r.gross_edge for r in valid], True)
+    k = float(task["th"].get("mining_n_factor", thresholds.LEGACY["mining_n_factor"]))
+    res = cal._finish(task, subject, best.params, [r.edge for r in valid], [r.gross_edge for r in valid], True, k)
     sim = subject.simulate(best.params)
     cand_e, _ = metrics.edge(sim.net - subject.rf, sim.bench - subject.rf)
     method = str(task["th"].get("dsr_variance", thresholds.LEGACY["dsr_variance"]))
-    d = deflate(cand_e, np.asarray([r.edge for r in valid]), subject.dpy, method)
+    d = deflate(cand_e, np.asarray([r.edge for r in valid]), subject.dpy, method,
+                weight=np.full(len(valid), k) if k != 1.0 else None)
     # Enough to recompute the Deflated Sharpe at another N without re-running (``rejudge`` with ``n_factor``).
     res["dsr_inputs"] = {k: d[k] for k in ("sr", "n", "skew", "kurt", "rho", "var_annual", "n_trials")}
     sig = grammar.signature(best.spec)

@@ -364,7 +364,7 @@ def _batch_one(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _finish(task: dict[str, Any], subject: BarSubject | PanelSubject, params: dict[str, float], selection: list[float],
-            gross: list[float], counted: bool) -> dict[str, Any]:
+            gross: list[float], counted: bool, weight: float = 1.0) -> dict[str, Any]:
     """Run the gauntlet on a calibration subject and record the Deflated Sharpe under every variance method.
 
     Every stage but significance is the same whatever the method, so one run measures them all: ``dsr_by`` holds
@@ -378,6 +378,7 @@ def _finish(task: dict[str, Any], subject: BarSubject | PanelSubject, params: di
             ``counted``).
         gross: Annual edge Sharpes before costs, aligned with ``selection``.
         counted: Whether the candidate is already in ``selection``.
+        weight: How many trials each one in ``selection`` counts as in N (``mining_n_factor`` for a miner's trials).
 
     Returns:
         The task plus ``values`` (stage measurements), ``passed`` (per stage), ``admitted``, ``failed_stage``,
@@ -385,7 +386,7 @@ def _finish(task: dict[str, Any], subject: BarSubject | PanelSubject, params: di
         ``STUDY_METHODS``) and compact grid ``records`` for the ledger.
     """
     out = evaluate(subject, params, th=task["th"], selection=selection, candidate_counted=counted,
-                   seed=task["seed"])
+                   seed=task["seed"], selection_weight=[weight] * len(selection) if weight != 1.0 else None)
     dpy = subject.dpy
     cand_e = out["candidate_edge_daily"].to_numpy()
     cand_gross = next(s for s in out["stages"] if s.key == "costs").chart["gross_edge_sharpe"]
@@ -394,8 +395,9 @@ def _finish(task: dict[str, Any], subject: BarSubject | PanelSubject, params: di
     ok = np.isfinite(trial)
     trial, g = trial[ok], g[ok]
     dsr_by, sr0_by = {}, {}
+    w = np.full(len(trial), weight) if weight != 1.0 else None
     for method in stats.VARIANCE_METHODS:
-        d = deflate(cand_e, trial, dpy, method)
+        d = deflate(cand_e, trial, dpy, method, weight=w)
         dsr_by[method], sr0_by[method] = d["dsr"], d["sr0"] * math.sqrt(dpy)
     # Study only: the spread of the trials that earned an edge before costs, N unchanged.
     d = stats.dsr(cand_e, max(len(trial), 1), stats.trial_variance(trial[g > 0] / math.sqrt(dpy)))

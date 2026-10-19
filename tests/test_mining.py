@@ -452,3 +452,38 @@ def test_mining_api(spy, monkeypatch):
     assert b["max_trials"] == 50 and b["used"] == 20
     assert client.get("/api/mining/budgets").json()[0]["question"] == "mined:SPY:1d"
     assert client.get("/api/mining/calibration").json() is None
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Mined trials counting more than once in N (decision 0011)
+
+
+def test_mining_n_factor_weights_mined_trials_only():
+    """The factor multiplies mined trials in N and nothing else; versions without the key count each trial once."""
+    from qlab.gauntlet import pipeline, stats
+
+    assert thresholds.current()[1]["mining_n_factor"] == 1.0
+    with pytest.raises(ValueError, match="at least 1"):
+        thresholds.update({"mining_n_factor": 0.5}, "too small")
+    th = {"mining_n_factor": 3.0}
+    assert pipeline.trial_weights(["mined_abc", "trend_sma", "mined_def"], th) == [3.0, 1.0, 3.0]
+    rng = np.random.default_rng(4)
+    cand = rng.normal(0.0004, 0.01, 2500)
+    trials = rng.normal(0, 0.3, 200)
+    plain = pipeline.deflate(cand, trials, 252, "luck_max")
+    heavy = pipeline.deflate(cand, trials, 252, "luck_max", weight=np.full(200, 3.0))
+    assert plain["n_trials"] == 200 and heavy["n_trials"] == 600
+    assert heavy["sr0"] > plain["sr0"] and heavy["dsr"] < plain["dsr"]
+    assert heavy["var_annual"] == pytest.approx(plain["var_annual"])
+    assert stats.expected_max_sharpe(600, 1.0) > stats.expected_max_sharpe(200, 1.0)
+
+
+def test_a_mined_card_counts_mined_trials_by_the_factor(spy):
+    """With the factor in force, a job's luck line and a mined card's N count each mined trial that many times."""
+    thresholds.update({**FAST, "mining_n_factor": 2.0}, "count mined trials twice")
+    rep = jobs.run(jobs.create(spy, "random", 40, 5, workers=1)["job_id"], log=lambda m: None)
+    scored = rep["progress"]["n_valid"]
+    assert rep["progress"]["N"] == 2 * scored
+    card = jobs.send_to_gauntlet(rep["job_id"], rep["top"][0]["strategy"])
+    sig = next(s for s in card["stages"] if s["key"] == "significance")
+    assert card["meta"]["n_trials"] == 2 * scored and "counts 2 times" in sig["summary"]

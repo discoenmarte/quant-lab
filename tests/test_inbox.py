@@ -173,6 +173,12 @@ def test_specs_only_name_templates_targets_and_parameters_the_lab_has():
         spec.validate({**SPEC, "target": "TSLA"})
     with pytest.raises(ValueError, match="needs a static universe"):
         spec.validate({**SPEC, "kind": "portfolio", "template": "trend_filter", "target": "crypto_top30"})
+    with pytest.raises(ValueError, match="template, target must be text"):
+        spec.validate({**SPEC, "template": {"name": "trend_sma"}, "target": ["SPY"]})
+    with pytest.raises(ValueError, match="sample_start must be text"):
+        spec.validate({**SPEC, "sample_start": {"year": 2000}})
+    with pytest.raises(ValueError, match="claimed_sharpe must be a number"):
+        spec.validate({**SPEC, "claimed_sharpe": True})
 
 
 def test_the_full_text_keeps_the_article_and_drops_menus_scripts_and_references():

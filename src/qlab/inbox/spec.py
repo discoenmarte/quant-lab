@@ -145,13 +145,18 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
         normalised dates, and ``notes`` on anything changed.
 
     Raises:
-        ValueError: Missing or extra keys, an unknown template or target, or a template that doesn't fit the
-            target's kind.
+        ValueError: Missing or extra keys, a value of the wrong type, an unknown template or target, or a template
+            that doesn't fit the target's kind.
     """
     missing = [k for k in SCHEMA["required"] if k not in data]
     extra = [k for k in data if k not in SCHEMA["properties"]]
     if missing or extra:
         raise ValueError(f"keys missing {missing}, unexpected {extra}")
+    texts = ("fit", "kind", "template", "target", "signal", "rebalance", "differences", "rationale")
+    wrong = [k for k in texts if not isinstance(data[k], str)]
+    wrong += [k for k in ("sample_start", "sample_end") if data[k] is not None and not isinstance(data[k], str)]
+    if wrong:
+        raise ValueError(f"{', '.join(wrong)} must be text")
     if data["fit"] not in FITS or data["kind"] not in ("bars", "portfolio"):
         raise ValueError("fit or kind outside its list")
     cat = catalog()
@@ -186,7 +191,7 @@ def validate(data: dict[str, Any]) -> dict[str, Any]:
             notes.append(f"{name} {v:g} moved to {snapped:g} (template range {spec['low']:g}-{spec['high']:g})")
         params[name] = snapped
     for key in ("claimed_sharpe", "claimed_cagr"):
-        if data[key] is not None and not isinstance(data[key], int | float):
+        if data[key] is not None and (isinstance(data[key], bool) or not isinstance(data[key], int | float)):
             raise ValueError(f"{key} must be a number or null")
     if data["costs_included"] is not None and not isinstance(data["costs_included"], bool):
         raise ValueError("costs_included must be true, false or null")

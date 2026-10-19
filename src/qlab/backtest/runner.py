@@ -178,7 +178,7 @@ def backtest(
         "costs": model.__dict__,
         "start": str(measured.iloc[0].date()),
         "end": str(measured.iloc[-1].date()),
-        "history_from": str(bars["ts"].iloc[0].date()) if warm else None,
+        "history_from": str(bars["ts"].iloc[0].date()) if warm and not keep[0] else None,
         "metrics": stats,
         "trial_id": None,
     }

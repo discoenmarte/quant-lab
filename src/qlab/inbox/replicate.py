@@ -8,7 +8,8 @@ Design (decision 0010):
   (``√((1 + SR²/2) / years)``): the lab trades ETFs or crypto where papers often used futures, stocks or other
   periods, so close is all that can be asked. A paper that claims no Sharpe ratio gets the run without a verdict.
 - Both runs load two years of **history** before their window (``HISTORY_DAYS``), so a 12-month rule is already
-  positioned when the window opens instead of sitting flat through its warm-up; only the window is measured.
+  positioned when the window opens instead of sitting flat through its warm-up; only the window is measured. A
+  window opens no earlier than two years after the target's data begins, so no measured day is a warm-up day.
 - **Post-publication** runs the same rule from the paper's publication date to the end of the research period.
   McLean & Pontiff (2016) found published anomalies lose about half their returns after publication; this is the
   lab's own check. Papers published after the lockbox date have no post-publication research data at all: their
@@ -27,6 +28,7 @@ from typing import Any
 
 from .. import audit, db, lockbox
 from ..backtest import runner as bar_runner
+from ..data import store
 from ..portfolio import runner as portfolio_runner
 from .spec import catalog, get
 
@@ -54,7 +56,7 @@ def _run(spec: dict[str, Any], start: str | None, end: str | None) -> dict[str, 
 
     Args:
         spec: The spec (template, kind, target, params).
-        start: First date or None (the start of the data).
+        start: First date or None; the window opens no earlier than ``HISTORY_DAYS`` after the data begins.
         end: Last date or None (clamped to the research period).
 
     Returns:
@@ -64,7 +66,12 @@ def _run(spec: dict[str, Any], start: str | None, end: str | None) -> dict[str, 
         ValueError: No data in the window.
         FileNotFoundError: The target's data isn't ingested.
     """
-    history = str(date.fromisoformat(start[:10]) - timedelta(days=HISTORY_DAYS)) if start else None
+    if spec["kind"] == "portfolio":
+        first = portfolio_runner.load_panel(spec["target"]).ts[0].date()
+    else:
+        first = store.read_series(catalog()["instruments"][spec["target"]], spec["target"], "1d")["ts"].iloc[0].date()
+    start = str(max(date.fromisoformat(start[:10]) if start else first, first + timedelta(days=HISTORY_DAYS)))
+    history = str(date.fromisoformat(start) - timedelta(days=HISTORY_DAYS))
     if spec["kind"] == "portfolio":
         _, _, summary = portfolio_runner.backtest(spec["target"], spec["template"], spec["params"], start, end,
                                                   record_as=SOURCE, history_from=history)

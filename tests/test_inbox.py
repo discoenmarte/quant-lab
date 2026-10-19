@@ -310,7 +310,8 @@ def test_replication_compares_with_the_claim_and_tests_after_publication():
     spec.review(s["spec_id"], "approve", "classic rule")
     r = replicate.replicate(s["spec_id"])
     res = r["results"]
-    assert res["in_sample"]["start"] >= "2000-01-03" and res["in_sample"]["end"] <= "2010-06-30"
+    assert res["in_sample"]["start"] >= "2002-02-01" and res["in_sample"]["end"] <= "2010-06-30"
+    assert res["in_sample"]["history_from"] == "2000-01-03"  # two years of data before the window
     assert res["verdict"] in ("replicated", "not_replicated") and r["status"] == res["verdict"]
     assert "after the research period" in res["post_publication"]["reason"]
     assert ledger.count_trials("trend_sma:SPY:1d") == 1

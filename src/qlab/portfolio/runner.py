@@ -126,7 +126,7 @@ def backtest(
         "symbols": panel.symbols,
         "start": str(panel.ts[i0].date()),
         "end": str(panel.ts[-1].date()),
-        "history_from": str(panel.ts[0].date()) if warm else None,
+        "history_from": str(panel.ts[0].date()) if warm and i0 > 0 else None,
         "metrics": stats,
         "trial_id": None,
     }

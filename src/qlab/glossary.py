@@ -187,4 +187,37 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "rebalancing for free every day, a hidden daily trade that is worth several percent a year when coins "
         "move 5% a day.",
     },
+    "lifecycle": {
+        "term": "Lifecycle state",
+        "short": "Where a report card is now: candidate, validated, in the paper book, near-miss, rejected or retired.",
+        "long": "Derived from the card's verdict, the paper book and the owner's retirements, never typed in. The "
+        "verdict is shown next to it, so a rejected card that is tracked in the paper book still reads rejected.",
+    },
+    "near_miss": {
+        "term": "Near-miss",
+        "short": "Rejected only by the luck stages: the permutation test or the Deflated Sharpe.",
+        "long": "It passed every check of how the rule behaves (costs, out of sample, neighbours, regimes) but its "
+        "edge was measured too imprecisely to tell from luck. Worth free forward days in the paper book, not money. "
+        "Near is about which stages failed, not by how much: read its p-value and DSR.",
+    },
+    "daily_report": {
+        "term": "Daily lab report",
+        "short": "Since the last report: what the lab tested, what passed, what is in the paper book, how it is doing.",
+        "long": "Built from the ledger, the report cards, the paper book's saved scores, the audit log and the data "
+        "catalog after every nightly job (or on demand). It runs no backtest, so building it adds no trial.",
+    },
+    "freshness": {
+        "term": "Data freshness",
+        "short": "How many sessions a source's stalest default symbol is behind the latest finished session.",
+        "long": "Tolerances absorb what the calendar doesn't model: 1 session for US ETFs (holidays), 2 days for "
+        "Binance (the archive publishes a day late), 95 days for the Ken French factors (published monthly with a "
+        "lag). Beyond them a stale-data alert fires.",
+    },
+    "alert_rules": {
+        "term": "Alert rules",
+        "short": "A new candidate, a paper-book decay alarm, stale data, a failed nightly job.",
+        "long": "Each condition alerts once, in the first report that sees it, and again only if it clears and comes "
+        "back; a failed nightly job alerts every time. A forward edge outside its 90% band is not an alert, because "
+        "that happens one day in ten by design.",
+    },
 }

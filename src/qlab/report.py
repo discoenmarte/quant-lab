@@ -208,12 +208,13 @@ def headline(rep: dict[str, Any]) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     t, since = rep["trials"], _since_text(rep["since"])
 
-    if t["total"]:
-        extra = [f"{t['calibration']:,} calibration trials" if t["calibration"] else "",
-                 f"{t['paper']:,} paper-book scorings" if t["paper"] else ""]
-        extra = [x for x in extra if x]
+    extra = [x for x in (_plural(t["calibration"], "calibration trial") if t["calibration"] else "",
+                         _plural(t["paper"], "paper-book scoring") if t["paper"] else "") if x]
+    if t["research"]:
         text = (f"Tested {_plural(t['research'], 'research trial')} on {_plural(t['questions'], 'question')} {since}"
                 + (f", plus {' and '.join(extra)}" if extra else "") + ".")
+    elif extra:
+        text = f"No research trials {since}; {' and '.join(extra)}."
     else:
         text = f"No new trials {since}."
     out.append({"topic": "tested", "tone": "info", "text": text})

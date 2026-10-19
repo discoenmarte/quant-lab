@@ -48,15 +48,17 @@ DEFAULT: dict[str, Any] = {
     "pbo_max": 1.0,                # significance: PBO at or below this (1 = reported, not gated)
     "fdr_prior": 0.05,             # significance: prior share of tested ideas that are real (for the FDR)
     "fdr_sr1": 0.5,                # significance: annual edge Sharpe of a real idea (for the FDR)
-    "regime_min_share": 0.6,       # regimes: share of regimes with a positive net return
+    "regime_min_share": 0.6,       # regimes: share of regimes with a positive edge (or net return, see basis)
     "max_corr": 0.5,               # diversification: correlation to the validated portfolio
     "grid_max": 300,               # parameter grid: most configurations evaluated per run
     "dsr_variance": "luck_max",    # significance: how the spread of trial Sharpes is estimated (see stats)
+    "regime_basis": "net",         # regimes: judge the edge over the passive alternative or the net return
 }
+REGIME_BASES = ("edge", "net")
 
 # Values that reproduce how versions saved before a key existed judged. A key missing from a stored version takes
 # its legacy value here, not today's default, so adding a key never changes an earlier version.
-LEGACY: dict[str, Any] = {"dsr_variance": "sample"}
+LEGACY: dict[str, Any] = {"dsr_variance": "sample", "regime_basis": "net"}
 
 
 def _validate(key: str, value: Any) -> None:
@@ -67,14 +69,17 @@ def _validate(key: str, value: Any) -> None:
         value: Proposed value.
 
     Raises:
-        ValueError: Unknown key, a non-number, a ``lockbox_from`` that isn't an ISO date, or an unknown
-            variance method.
+        ValueError: Unknown key, a non-number, a ``lockbox_from`` that isn't an ISO date, an unknown
+            variance method or an unknown regime basis.
     """
     if key not in DEFAULT:
         raise ValueError(f"unknown threshold: {key}")
     if key == "dsr_variance":
         if value not in VARIANCE_METHODS:
             raise ValueError(f"dsr_variance must be one of {', '.join(VARIANCE_METHODS)}")
+    elif key == "regime_basis":
+        if value not in REGIME_BASES:
+            raise ValueError(f"regime_basis must be one of {', '.join(REGIME_BASES)}")
     elif key == "lockbox_from":
         try:
             date.fromisoformat(str(value))

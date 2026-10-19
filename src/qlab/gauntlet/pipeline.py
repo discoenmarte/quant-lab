@@ -44,7 +44,7 @@ from .nulls import stationary_bootstrap
 from .pbo import pbo
 from .subjects import BarSubject, PanelSubject, days_per_year, subject_from_meta, to_daily
 
-__all__ = ["STAGES", "days_per_year", "to_daily", "deflate", "evaluate", "judge", "run_gauntlet",
+__all__ = ["STAGES", "days_per_year", "to_daily", "deflate", "evaluate", "judge", "regime_basis", "run_gauntlet",
            "run_portfolio_gauntlet"]
 
 STAGES = [
@@ -286,6 +286,19 @@ def _ok(x: float | None) -> bool:
     return x is not None and math.isfinite(x)
 
 
+def regime_basis(th: dict[str, Any]) -> str:
+    """What the regimes stage judges under some thresholds.
+
+    Args:
+        th: Thresholds.
+
+    Returns:
+        ``edge`` (the edge over the passive alternative in each regime) or ``net`` (the net return), the legacy
+        value when ``th`` predates the key.
+    """
+    return str(th.get("regime_basis", thresholds.LEGACY["regime_basis"]))
+
+
 def judge(v: dict[str, float], th: dict[str, Any]) -> dict[str, bool | None]:
     """Pass or fail each stage from its measured values. The only place where thresholds decide.
 
@@ -298,7 +311,12 @@ def judge(v: dict[str, float], th: dict[str, Any]) -> dict[str, bool | None]:
 
     Returns:
         Stage key to True (pass), False (fail) or None (can't reject: sizing, not applicable, sealed).
+
+    Raises:
+        KeyError: A value the thresholds need is missing, for example ``regime_edge_share`` in a run measured
+            before the edge by regime existed.
     """
+    regimes = v["regime_edge_share"] if regime_basis(th) == "edge" else v["regime_share"]
     return {
         "leakage": bool(v["leak"]),
         "costs": _ok(v["edge"]) and v["edge"] > th["min_net_sharpe"] and _ok(v["net_cagr"]) and v["net_cagr"] > 0,
@@ -309,7 +327,7 @@ def judge(v: dict[str, float], th: dict[str, Any]) -> dict[str, bool | None]:
         "bootstrap": None,
         "significance": _ok(v["dsr"]) and v["dsr"] >= th["dsr_min"]
         and (not _ok(v["pbo"]) or v["pbo"] <= th["pbo_max"]),
-        "regimes": (v["regime_share"] >= th["regime_min_share"]) if _ok(v["regime_share"]) else None,
+        "regimes": (regimes >= th["regime_min_share"]) if _ok(regimes) else None,
         "diversification": (v["div_corr"] <= th["max_corr"] and v["div_gain"] >= 0) if _ok(v["div_corr"])
         and _ok(v["div_gain"]) else None,
         "lockbox": None,
@@ -538,8 +556,11 @@ def evaluate(
     ))
     lap("significance")
 
-    # 8. Regimes: up and down markets, calm and turbulent ones, and the worst crashes.
+    # 8. Regimes: up and down markets, calm and turbulent ones, and the worst crashes. The edge in each regime is the
+    # mean of the candidate's daily edge there; the net return is measured beside it, and the thresholds choose which
+    # one the stage judges (``regime_basis``).
     s_r = pd.Series(R[:, 0], index=days)
+    e_r = pd.Series(cand_e, index=days)
     b_r = pd.Series(bench, index=days)
     level = (1.0 + b_r).cumprod()
     sma = level.rolling(200, min_periods=200).mean()
@@ -553,20 +574,25 @@ def evaluate(
         if rmask.sum() < 20:
             continue
         rows.append({"regime": name, "days": int(rmask.sum()), "strategy": float(s_r[rmask].mean() * dpy),
-                     "benchmark": float(b_r[rmask].mean() * dpy)})
+                     "edge": float(e_r[rmask].mean() * dpy), "benchmark": float(b_r[rmask].mean() * dpy)})
     crises = [{"regime": f"crash {pk.date()} → {tr.date()}", "days": int(((days >= pk) & (days <= tr)).sum()),
                "strategy": float((1 + s_r[pk:tr]).prod() - 1), "benchmark": float((1 + b_r[pk:tr]).prod() - 1),
                "depth": depth} for pk, tr, depth in crisis_windows(b_r)]
     positive = sum(r["strategy"] > 0 for r in rows)
-    share_pos = positive / len(rows) if rows else float("nan")
-    values["regime_share"] = share_pos
+    positive_edge = sum(r["edge"] > 0 for r in rows)
+    values["regime_share"] = positive / len(rows) if rows else float("nan")
+    values["regime_edge_share"] = positive_edge / len(rows) if rows else float("nan")
+    on_edge = regime_basis(th) == "edge"
+    counts = (f"Edge positive in {positive_edge} of {len(rows)} regimes (net return positive in {positive})"
+              if on_edge else f"Net return positive in {positive} of {len(rows)} regimes (edge positive in "
+              f"{positive_edge})")
     stages.append(Stage(
-        "regimes", "Regimes", None, share_pos,
-        f"positive in >= {th['regime_min_share']:.0%} of regimes",
-        f"Net return positive in {positive} of {len(rows)} regimes. "
+        "regimes", "Regimes", None, values["regime_edge_share" if on_edge else "regime_share"],
+        f"{'edge' if on_edge else 'net return'} positive in >= {th['regime_min_share']:.0%} of regimes",
+        f"{counts}. "
         + "; ".join(f"{c['regime'].split(' ')[1]} crash: {c['strategy']:+.0%} vs {c['benchmark']:+.0%}"
                     for c in crises),
-        {"rows": rows, "crises": crises},
+        {"rows": rows, "crises": crises, "basis": regime_basis(th)},
     ))
     lap("regimes")
 

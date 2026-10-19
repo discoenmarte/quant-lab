@@ -61,6 +61,12 @@ STAGES = [
 ]
 
 Z_95 = 1.6448536269514722
+# How the significance stage explains a spread of trial Sharpes narrower than their plain standard deviation.
+SPREAD_NOTE = {
+    "upper_half": "the spread above the median, {used:.2f}, is used instead of the plain {plain:.2f}",
+    "mad": "the MAD spread, {used:.2f}, is used instead of the plain {plain:.2f}",
+    "luck_bound": "the trials' Sharpes spread {plain:.2f}, wider than luck can ({used:.2f}), so {used:.2f} is used",
+}
 
 
 @dataclass
@@ -505,8 +511,8 @@ def evaluate(
         f"DSR >= {th['dsr_min']}" + (f" and PBO <= {th['pbo_max']}" if th["pbo_max"] < 1 else " (PBO reported)"),
         f"DSR {_f(d['dsr'], '{:.3f}')} after N = {n_trials} trials on this instrument (luck alone reaches an edge "
         f"Sharpe of {_f(_ann(d['sr0'], dpy))}"
-        + (f"; trial Sharpes spread {math.sqrt(d['var_annual']):.2f} by the {d['var_method']} estimate, "
-           f"{math.sqrt(d['var_sample_annual']):.2f} as a plain standard deviation" if narrowed else "")
+        + ("; " + SPREAD_NOTE[d["var_method"]].format(used=math.sqrt(d["var_annual"]),
+                                                       plain=math.sqrt(d["var_sample_annual"])) if narrowed else "")
         + f"); PBO {_f(p['pbo'])}; chance it's a false discovery {_f(fdr, '{:.0%}')}.",
         {**d, "sr_annual": _ann(d["sr"], dpy), "sr0_annual": _ann(d["sr0"], dpy),
          "trial_sharpes": np.round(trial_sr, 4).tolist()[:5000], "pbo": p["pbo"], "logits": p["logits"],

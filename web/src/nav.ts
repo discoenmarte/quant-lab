@@ -116,7 +116,15 @@ export const NAV: { group: string; items: NavItem[] }[] = [
   {
     group: 'Operations',
     items: [
-      { path: '/board', label: 'Strategy Board', icon: 'board', milestone: 'M6', ready: false, blurb: 'Candidates, incubation, live, retired.' },
+      {
+        path: '/board',
+        label: 'Strategy Board',
+        icon: 'board',
+        milestone: 'M6',
+        ready: true,
+        blurb: 'Every report card in its lifecycle state, the daily lab report and the alert log.',
+        planned: ['Allocator across validated strategies (HRP, risk parity with caps)', 'Correlation heatmap and "what if I add X?"'],
+      },
       {
         path: '/desk',
         label: 'Trading Desk',

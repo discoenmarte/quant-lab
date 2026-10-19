@@ -53,6 +53,27 @@ export function utc(iso: string | null | undefined): string {
 }
 
 /**
+ * Format a UTC timestamp as the exchange's wall-clock time, to show next to the UTC one.
+ *
+ * @param iso - ISO-8601 string in UTC without timezone (the API stores naive UTC).
+ * @returns E.g. "Oct 18, 20:06 New York", or a dash when empty.
+ */
+export function nyTime(iso: string | null | undefined): string {
+  if (!iso) return DASH;
+  const d = new Date(`${iso.slice(0, 19)}Z`);
+  if (Number.isNaN(d.getTime())) return DASH;
+  const text = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(d);
+  return `${text} New York`;
+}
+
+/**
  * Pick a tone for a signed number, so gains read green and losses read red.
  *
  * @param x - Value.

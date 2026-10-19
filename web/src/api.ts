@@ -604,3 +604,160 @@ export interface PaperScoreResult {
   alarm?: boolean | null;
   message: string;
 }
+
+/** Lifecycle state of a report card in the registry (decision 0008). */
+export type LifecycleState = 'candidate' | 'validated' | 'in_paper_book' | 'near_miss' | 'rejected' | 'retired';
+
+/** One report card with its lifecycle state and headline stage values. */
+export interface RegistryCard {
+  card_id: string;
+  created_at: string;
+  question: string;
+  family: string;
+  strategy: string;
+  scope: string;
+  params?: Record<string, number>;
+  verdict: Verdict;
+  thresholds_version?: number;
+  /** Stage keys the card failed, in gauntlet order. */
+  failed: StageKey[];
+  /** Whether the near-miss rule holds, whatever the state (a near-miss in the paper book stays one). */
+  near_miss: boolean;
+  state: LifecycleState;
+  label: string;
+  /** UTC time the card entered its current state. */
+  since: string;
+  /** Active paper-book entry, if any. */
+  entry_id: string | null;
+  interval: string;
+  /** Edge Sharpe after costs. */
+  edge: number | null;
+  /** Out-of-sample edge Sharpe from walk-forward re-optimisation. */
+  oos_edge: number | null;
+  perm_p: number | null;
+  dsr: number | null;
+}
+
+/** The registry: states in board order, counts and every card. */
+export interface Registry {
+  states: { key: LifecycleState; label: string; description: string }[];
+  counts: Record<LifecycleState, number>;
+  cards: RegistryCard[];
+}
+
+/** One sentence of the report's plain answer. */
+export interface HeadlineItem {
+  topic: string;
+  tone: 'ok' | 'good' | 'info' | 'warn' | 'bad';
+  text: string;
+}
+
+/** Freshness of one source and interval. */
+export interface FreshnessRow {
+  source: string;
+  interval: string;
+  asset_class: string;
+  status: string | null;
+  last_success: string | null;
+  n_series: number;
+  missing: string[];
+  newest: string | null;
+  oldest: string | null;
+  laggard: string | null;
+  expected: string | null;
+  behind: number | null;
+  tolerance: number;
+  unit: string;
+  stale: boolean;
+  message: string;
+}
+
+/** One paper-book entry as the daily report summarises it. */
+export interface ReportPaperEntry {
+  entry_id: string;
+  card_id: string;
+  question: string;
+  verdict: Verdict;
+  status: 'active' | 'retired';
+  added_at: string;
+  retired_at: string | null;
+  research_edge_sharpe: number | null;
+  scored_at: string | null;
+  through: string | null;
+  n_days: number;
+  forward_return: number | null;
+  benchmark_return: number | null;
+  band: Pick<PaperBand, 'research' | 'forward' | 'floor' | 'ceiling' | 'status' | 'evidence_years'>;
+  alarm: { applicable: boolean | null; value: number | null; h: number | null; alarm: boolean; first_alarm: string | null; arl1_years: number | null } | null;
+  n_decisions: number;
+  late: number;
+  last_decision: Pick<PaperDecision, 'as_of' | 'decided_at' | 'next_open' | 'lead_hours'> | null;
+  new_decisions: number;
+}
+
+/** An alert as stored in the alert log. */
+export interface AlertRow {
+  alert_id: string;
+  created_at: string;
+  report_id: string | null;
+  rule: 'new_candidate' | 'paper_alarm' | 'stale_data' | 'nightly_failed' | 'daily_report' | 'test';
+  severity: 'info' | 'good' | 'warn' | 'bad';
+  key: string;
+  title: string;
+  message: string;
+  link: string;
+  /** Channel name to "ok" or "error: ...". */
+  delivery: Record<string, string>;
+}
+
+/** An alert channel and whether it delivers (never includes a token). */
+export interface AlertChannel {
+  name: 'file' | 'macos' | 'telegram';
+  enabled: boolean;
+  detail: string;
+}
+
+/** The daily lab report (``qlab.report.build``). */
+export interface DailyReport {
+  report_id: string;
+  created_at: string;
+  /** UTC time of the previous report; null for the first one. */
+  since: string | null;
+  previous_id: string | null;
+  trigger: 'nightly' | 'cli' | 'web';
+  headline: HeadlineItem[];
+  trials: {
+    total: number;
+    research: number;
+    calibration: number;
+    paper: number;
+    questions: number;
+    by_source: { source: string; n: number; questions: number }[];
+    by_question: { question: string; source: string; n: number; n_total: number; best_edge_sharpe: number | null }[];
+    calibration_studies: { report: string; ts: string; fpr?: number; runs?: number; trials?: number }[];
+  };
+  verdicts: RegistryCard[];
+  transitions: { card_id: string; question: string; from: LifecycleState | null; to: LifecycleState }[];
+  registry: { counts: Record<LifecycleState, number>; cards: RegistryCard[] };
+  paper: {
+    entries: ReportPaperEntry[];
+    runs: { n: number; decided: number; refused: number; errors: number; messages: string[] };
+  };
+  freshness: FreshnessRow[];
+  nightly: {
+    this_run: { ok: boolean; mode: string; error: string | null; started_at: string; finished_at: string } | null;
+    last: { ts: string; ok: boolean; mode: string | null } | null;
+  };
+  alerts: AlertRow[];
+  conditions: string[];
+}
+
+/** One saved report in the list of reports. */
+export interface ReportSummary {
+  report_id: string;
+  created_at: string;
+  since: string | null;
+  trigger: string;
+  n_alerts: number;
+  headline: HeadlineItem[];
+}

@@ -17,6 +17,7 @@ import { Home } from './pages/Home';
 import { Ledger } from './pages/Ledger';
 import { PortfolioLab } from './pages/PortfolioLab';
 import { Placeholder } from './pages/Placeholder';
+import { StrategyBoard } from './pages/StrategyBoard';
 import { System } from './pages/System';
 import { TradingDesk } from './pages/TradingDesk';
 
@@ -28,6 +29,7 @@ const PAGES: Record<string, ReactElement> = {
   '/portfolio': <PortfolioLab />,
   '/gauntlet': <Gauntlet />,
   '/ledger': <Ledger />,
+  '/board': <StrategyBoard />,
   '/desk': <TradingDesk />,
   '/system': <System />,
   '/audit': <Audit />,

@@ -3,7 +3,7 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6 and the Deflated Sharpe variance fix (thresholds v3)
+- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6, the Deflated Sharpe variance fix (thresholds v3) and M7b
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -63,14 +63,19 @@ src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, 
 src/qlab/paper/           forward paper book: sessions (bar open/close times), book (add, decide, retire), score
                           (replay through the engines), monitor (bands, CUSUM alarm), nightly (job + daily report,
                           launchd)
+src/qlab/broker/          broker paper trading: base (paper-only client, types), alpaca (paper API), binance_testnet
+                          (spot testnet), controls (kill, pause, resume, limits; append-only log), execution
+                          (sleeves, orders, fills, reconciliation, slippage, kill and flatten)
 src/qlab/api/main.py      FastAPI app; serves web/dist at /
 src/qlab/api/routes_core.py    /api/health, /system, /overview, /audit, /glossary, POST /demo
 src/qlab/api/routes_paper.py   /api/paper/book, /entries, /entries/{id}, /entries/{id}/retire, /run, /score
 src/qlab/api/routes_registry.py   /api/registry, /registry/{card}/retire
+src/qlab/api/routes_broker.py     /api/broker/status, /controls, /limits; POST /enroll, /execute, /sync, /kill,
+                                  /pause, /flatten/{entry}, /resume, /limits
 src/qlab/api/routes_report.py     POST /api/report, /report/latest, /report/{id}, /reports, /alerts,
                                   /alerts/channels, POST /alerts/test
 src/qlab/cli.py           qlab serve | init | ingest | backtest | portfolio | gauntlet | calibrate | paper | report |
-                          registry | alerts ...
+                          registry | alerts | broker ...
 tests/                    pytest; conftest gives each test its own QLAB_DATA folder
 web/src/App.tsx           shell: sidebar (nav.ts), top bar, routes, command palette
 web/src/nav.ts            every page, its milestone and whether it's built (flip `ready` when done)
@@ -80,7 +85,7 @@ web/src/components/       Card, Stat, Badge, InfoTip, DataTable, EChart, Icon, C
 .github/workflows/ci.yml  ruff + pytest, and web type-check + build, on every push
 docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack, 0004 gauntlet,
                           0005 portfolios and forward evidence first, 0006 crypto cross-section, 0007 paper book,
-                          0008 registry, daily report and alerts
+                          0008 registry, daily report and alerts, 0009 broker paper trading
 docs/preregistration/     batches written down and committed before they run
 ops/launchd/              template for the nightly job (rendered by `make paper-launchd`, never installed)
 ```
@@ -99,7 +104,8 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M3c | Breadth: crypto cross-section | **Done** (tag `m3c`). 588 Binance USDT pairs incl. delisted, point-in-time universes, drifting positions, four crypto factor rules, cross-sectional null, study E, eight pre-registered verdicts (all rejected). |
 | M7a | Forward paper book | **Done** (tag `m7a`). Decisions before outcomes, engine-exact scoring, frozen bands, CUSUM alarm, nightly job, Trading Desk. |
 | M6 | Registry, daily report, alerts | **Done** (tag `m6`). Lifecycle states derived for every card, a strict near-miss rule, a daily report after every nightly job, four alert rules (file, macOS, Telegram), Strategy Board. |
-| M7b, M4, M5 | Broker paper trading, inbox, mining | In that order (decision 0005). |
+| M7b | Broker paper trading | **Done** (tag `m7b`). Paper-only adapters (Alpaca paper, Binance testnet), sleeves, raw-price sizing, opening-auction orders, limits, kill switch in the top bar, reconciliation, slippage vs the model. Alpaca paper account connected; nothing enrolled yet (the owner's call). |
+| M4, M5 | Inbox, mining | Next, in that order (decision 0005). |
 | M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
 ## 5. What M1 and M2 delivered (facts worth knowing)
@@ -243,6 +249,53 @@ universe.
    question).
 3. Put the low-volatility near-miss in the forward paper book. Crypto decisions are late with the daily archive
    (gotchas), so a live price feed comes first.
+
+### M7b: broker paper trading (done; decision 0009)
+
+**Paper only, by construction.**
+- Every request goes through `broker.base.PaperClient`, which refuses any host but `paper-api.alpaca.markets` and
+  `testnet.binance.vision`.
+- Alpaca also refuses live keys (prefix `AK`) and a non-paper `ALPACA_ENDPOINT`.
+- **Keys:** the repository's `.env` or `data/lab.env` (both git-ignored).
+  - Alpaca: `ALPACA_KEY`/`ALPACA_SECRET`, the owner's names; the `QLAB_ALPACA_*` and `APCA_*` names also work.
+  - Binance: `QLAB_BINANCE_TESTNET_KEY`/`_SECRET`, from testnet.binance.vision, not binance.com.
+- Tests never see `.env` (`conftest.py`).
+- **Connected 2026-10-19:** the Alpaca paper account answered, 100,000 USD, all cash, no positions. Binance testnet
+  keys aren't set.
+
+**Sleeves.**
+- `qlab broker enroll <entry> --reason ... --confirm <entry>`, or the Trading Desk form, gives a paper-book entry
+  10,000 of paper money on its broker (ETFs go to Alpaca, crypto to Binance).
+- Holdings and cash come from the lab's own fills.
+- Enrolling adds risk, so the owner does it. Nothing is enrolled yet; the two book entries are `922c0528e008`
+  (all_etfs) and `ded5af67de61` (asset_classes_long).
+
+**Each night** (the nightly job, after decide and score; or `qlab broker sync` then `qlab broker execute`):
+1. Fetch fills, and reconcile each account against its baseline plus the lab's fills.
+2. Send each sleeve's latest decision, once:
+   - sized from the **raw** close, in whole shares or lot steps
+   - long-only, no leverage, sells first
+   - Alpaca orders join the opening auction (`opg`) when sent 19:00-09:28 New York, otherwise go as day orders
+   - Binance orders go at once
+3. Block any order that breaks a limit, and alert.
+
+**Limits** (`qlab broker limits`): 12,000 largest order, 40 orders a day, no leverage per sleeve, all sleeves at
+most 90% of the account, dust under 10.
+
+**Controls.**
+- The kill switch is in the top bar on every page (click twice), `qlab broker kill`, or `POST /api/broker/kill`.
+  It stops new orders at once, cancels open orders and sells every sleeve.
+- `pause` and `flatten <entry>` are instant.
+- `resume` (typed `RESUME`) and loosening a limit (typed `LOOSEN`) need a reason and take effect 24 hours later.
+
+**Measured, not assumed.** The Trading Desk shows each fill against the raw open the engine would have used
+(slippage in bps next to the model's 2 bps for ETFs), and every reconciliation.
+
+**To start the first paper trades:**
+1. Enroll one entry, e.g. `qlab broker enroll 922c0528e008 --reason "measure real fills for the trend-filter
+   near-miss" --confirm 922c0528e008`.
+2. Let the nightly job run (or run `qlab paper run`, then `qlab broker execute`, after 19:00 New York).
+3. The next morning, `qlab broker sync` records the auction fills.
 
 ### M7a: forward paper book (done; decision 0007)
 
@@ -455,6 +508,13 @@ holds at mining scale.
 - The lockbox and the paper book's forward days overlap (decision 0007 §6). Before a card in the book opens its
   lockbox, cap the lockbox window at the entry's first decision.
 - Crypto daily decisions are always late with the public archive (it publishes after the next candle opens).
+- Broker paper trading:
+  - Any scratch server started for UI work must blank the broker keys (`ALPACA_KEY=` and so on in its launch
+    entry), or it would read the repository's `.env` and trade the real paper account from scratch data.
+  - Alpaca's opening auction takes market-on-open orders only up to 09:28 New York; the lab sends `opg` from 19:00
+    and falls back to a day order. No holiday calendar: a decision for a holiday waits for the next open.
+  - The Binance testnet lists few pairs and resets now and then; both show up as rejections or reconciliation
+    mismatches, not as lab bugs.
 - Crypto cross-section:
   - **Timings:** the full ingest (`qlab ingest --source binance --universe usdt`, about 33,000 files) takes about
     20 minutes on an empty cache and a minute or two when cached. Re-run it to pick up new listings and months.

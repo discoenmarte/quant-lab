@@ -27,6 +27,11 @@ Development with hot reload: `make dev-api` in one terminal, `make dev-web` in a
 Forward paper book: add gauntlet cards on the Trading Desk (or `uv run qlab paper add <card>`), then run
 `make paper-nightly` after each US close, or `make paper-launchd` to print a launchd job that does it for you.
 
+Broker paper trading: put paper keys in `.env` (`ALPACA_KEY`, `ALPACA_SECRET`; Binance testnet keys as
+`QLAB_BINANCE_TESTNET_KEY`, `QLAB_BINANCE_TESTNET_SECRET`), enroll a paper-book entry on the Trading Desk (or
+`uv run qlab broker enroll <entry> --reason ... --confirm <entry>`), and the nightly job sends its decisions to
+the paper account. The KILL button in the top bar stops everything at once.
+
 Daily report: the nightly job ends with a report of what the lab tested, what passed, what is in the paper book and
 how it is doing, and whether the data is fresh. Read it on the Strategy Board, or build one now with `make report`.
 Alerts (a new candidate, a decay alarm, stale data, a failed nightly job) go to `data/alerts/alerts.jsonl` and macOS
@@ -120,7 +125,7 @@ flowchart LR
 | M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
 | M6 | Registry and alerts | Lifecycle states for every card and a strict near-miss rule (only the luck stages failed, p ≤ 0.10, PSR ≥ 0.80), a daily lab report from the ledger, cards, paper book, audit log and data freshness, four alert rules through a file, macOS and Telegram, the report at the end of the nightly job, Strategy Board ([decision 0008](docs/decisions/0008-registry-report-alerts.md)) | done |
 | M7a | Forward paper book | Daily targets recorded before the next bar exists, scored with the backtest engines against frozen research bands, a CUSUM decay alarm, a nightly job, Trading Desk ([decision 0007](docs/decisions/0007-forward-paper-book.md)) | done |
-| M7b | Broker paper trading | Broker paper accounts, real fills and reconciliation, kill switch | planned |
+| M7b | Broker paper trading | Paper-only Alpaca and Binance testnet adapters, sleeves sized from raw prices, opening-auction orders, limits outside the strategy, a kill switch on every page, reconciliation and slippage against the model ([decision 0009](docs/decisions/0009-broker-paper-trading.md)) | done |
 | M8 | Go-live gate | Evidence checklist, limits outside any model | planned |
 | M9 | Intraday mode | Validated intraday library, morning selector, replay | planned |
 
@@ -151,3 +156,4 @@ data/              local data lake and database (not committed)
 6. [A survivorship-free crypto cross-section: dynamic panels, drifting positions and a cross-sectional null](docs/decisions/0006-crypto-cross-section.md)
 7. [The forward paper book: decisions before outcomes, frozen expectations, honest power](docs/decisions/0007-forward-paper-book.md)
 8. [The registry, the daily report and alerts: derived states, a strict near-miss rule, alerts on changes](docs/decisions/0008-registry-report-alerts.md)
+9. [Broker paper trading: paper-only by construction, limits outside the strategy, friction only on adding risk](docs/decisions/0009-broker-paper-trading.md)

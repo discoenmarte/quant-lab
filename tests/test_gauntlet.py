@@ -241,6 +241,10 @@ def test_gauntlet_and_ledger_api(fast_thresholds):
     assert bad.status_code == 400
     ok = client.post("/api/gauntlet/thresholds", json={"changes": {"dsr_min": 0.9}, "reason": "test"}).json()
     assert ok["config"]["dsr_min"] == 0.9
+    method = client.post("/api/gauntlet/thresholds", json={"changes": {"dsr_variance": "upper_half"}, "reason": "t"})
+    assert method.json()["config"]["dsr_variance"] == "upper_half"
+    assert client.post("/api/gauntlet/thresholds",
+                       json={"changes": {"dsr_variance": "nope"}, "reason": "t"}).status_code == 400
     assert client.get("/api/gauntlet/lockbox").json()["sealed_from"] == lockbox.DEFAULT_FROM
     refused = client.post(f"/api/gauntlet/cards/{card_id}/lockbox", json={"confirm": "x", "reason": "y"})
     assert refused.status_code == 400

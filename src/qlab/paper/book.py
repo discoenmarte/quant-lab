@@ -192,7 +192,8 @@ def add(card_id: str, note: str = "", actor: str = "user", now: datetime | None 
 
     Raises:
         FileNotFoundError: Unknown card, or its data isn't ingested.
-        Refused: The card is already active in the book, or it isn't a daily or portfolio strategy.
+        Refused: The card is already active in the book, it isn't a daily or portfolio strategy, or it holds
+            only overnight or only by day (mined session rules).
     """
     card = load_card(card_id)
     m = card["meta"]
@@ -204,6 +205,9 @@ def add(card_id: str, note: str = "", actor: str = "user", now: datetime | None 
     entry_id = uuid.uuid4().hex[:12]
     subject_meta = {k: m.get(k) for k in SUBJECT_KEYS}
     subject = subject_from_meta(subject_meta, pd.Timestamp(m["lockbox_from"], tz="UTC"))
+    if getattr(subject, "session", "all") != "all":
+        raise Refused("the book and the brokers trade at the open; a rule held only overnight or only by day "
+                      "needs orders at the close, which the lab doesn't send yet")
     params = m["params"]
     sim = subject.simulate(params)
     ref = monitor.reference_from(sim.net, sim.bench, subject.rf, subject.dpy)

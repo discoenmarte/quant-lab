@@ -10,7 +10,9 @@ backtest is recorded in a trial ledger, so the statistics stay honest about how 
 **Calibrated:** with 20 years of daily data the gauntlet catches an edge Sharpe of 1.0 95% of the time and 0.5
 about half the time, and lets noise through 1.4% of the time ([decision 0004](docs/decisions/0004-gauntlet-design.md)).
 On synthetic crypto cross-sections of 5.6 years it lets noise through 0.16% of the time and catches a momentum edge
-of 1.0 85% of the time ([decision 0006](docs/decisions/0006-crypto-cross-section.md)).
+of 1.0 85% of the time ([decision 0006](docs/decisions/0006-crypto-cross-section.md)). From thresholds v4 every stage
+judges the edge over the passive alternative, the regimes stage included. The one exception is the costs stage, which
+also requires a positive net CAGR, because a strategy should make money after costs.
 
 > Research and paper trading only. Nothing in this repository places real-money orders.
 

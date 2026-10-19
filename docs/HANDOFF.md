@@ -3,7 +3,8 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6, the Deflated Sharpe variance fix (thresholds v3) and M7b
+- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6, the Deflated Sharpe variance fix (thresholds v3), M7b,
+  the regimes stage on the edge (thresholds v4) and the near-miss caps
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -137,9 +138,10 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 - **Lockbox:** fixed at 2024-10-01. Spent per question when any trial covers a sealed date. Already spent:
   `trend_sma:SPY:1d`, `trend_sma:TLT:1d`, `tsmom:BTCUSDT:1d` (M2 Studio runs).
 - **Thresholds:** v1 = calibrated defaults (PBO reported, walk-forward needs a positive OOS edge, permutation
-  p ≤ 0.05); v2 = permutation p ≤ 0.02 after study B showed trend rules at 7% false positives; **v3 (in force)** =
-  the Deflated Sharpe's spread of trial Sharpes capped at what luck can produce (`dsr_variance: luck_max`, studies
-  F and G, decision 0004 addendum).
+  p ≤ 0.05); v2 = permutation p ≤ 0.02 after study B showed trend rules at 7% false positives; v3 = the Deflated
+  Sharpe's spread of trial Sharpes capped at what luck can produce (`dsr_variance: luck_max`, studies F and G);
+  **v4 (in force)** = the regimes stage judges the edge, not the net return (`regime_basis: edge`, studies H and I).
+  Both are decision 0004 addenda.
 - **Calibration** (`qlab calibrate --seed N`, ~8 min on 12 cores, ~375k trials per study, all under `calib:`
   questions): study C on fresh seeds passes noise 1.4% (worst family 3%) and catches edge 1.0 / 0.5 95% / 52% of
   the time with 20 years. Full table in decision 0004.
@@ -245,8 +247,8 @@ universe.
 
 1. ~~Estimate the Deflated Sharpe's cross-trial variance robustly~~: done, thresholds v3 (see "The Deflated
    Sharpe's spread of trial Sharpes" below).
-2. Decide whether the absolute-return gates (net CAGR > 0, regimes) fit long-only crypto (decision 0006, open
-   question).
+2. ~~Decide whether the absolute-return gates (net CAGR > 0, regimes) fit long-only crypto~~: the owner kept net
+   CAGR > 0 and moved regimes to the edge (thresholds v4, see "The regimes stage judges the edge" below).
 3. Put the low-volatility near-miss in the forward paper book. Crypto decisions are late with the daily archive
    (gotchas), so a live price feed comes first.
 
@@ -421,6 +423,39 @@ re-judged. Batch `23275b56` would have had a luck threshold of about 0.5, and st
    depend on the version.
 2. If the paper inbox or mining (M4, M5) mixes trials of different lengths on one scope, check that each trial's
    span reaches `evaluate` (`selection_days`). `judge_subject` and `judge_batch` already pass it.
+
+### The regimes stage judges the edge (done; decision 0004 addendum, thresholds v4)
+
+**Problem.** Two stages judged absolute returns while every other stage judged the edge: the costs stage's net
+CAGR > 0, and the regimes stage (net return positive in at least 60% of bull, bear, calm and turbulent days). Study
+E (decision 0006) found they blocked edges that beat a falling crypto index. The owner chose to keep net CAGR > 0
+(money after costs matters) and make regimes judge the edge.
+
+**Change.**
+
+- `evaluate` measures the mean daily edge and the net return in each regime.
+- The threshold key `regime_basis` (`edge` or `net`) picks which one the stage judges. Versions saved before the key
+  keep `net` (`thresholds.LEGACY`).
+- The card's regimes chart shows edge, net return and buy-and-hold per regime.
+- A calibration report carries `by_regime_basis`: both bases on the same runs. The Calibration what-if can switch
+  basis. Reports made before the change refuse the edge, since their runs never measured it.
+
+**Evidence.** The rule was written before the results: every noise family at or below 5% in two studies on fresh
+seeds. Both ran `qlab calibrate --xs-reps 40 --xs-power-reps 20` from a clean worktree of `f9bd039`, about 110
+minutes and 666,280 trials each.
+
+- **Study H** (`39bc09c3`, seeds 290,001+) and **study I** (`d7ca1095`, seeds 330,001+): no family above 5% on either
+  basis. Pooled noise is 0.80% on the edge against 0.82% on the net return (3,760 runs). The worst family is
+  trend_sma fixed in advance: 5 of 100 in I under both bases, the same runs.
+- **Power:** a single-instrument trend edge of 1.0 is caught 35/76/98% of the time with 5/10/20 years, against
+  28/71/94%. Portfolios are unchanged, and crypto momentum is essentially unchanged.
+- **Crypto size** at 1.0 rises only from 5% to 8%, because net CAGR > 0 still binds on zero-drift markets. Without
+  that condition it would be 30%; the decision record gives this as information for the owner.
+- **The old stage mostly measured drift:** on the net return it passed 59-85% of single-instrument noise fixed in
+  advance; on the edge it passes 17-35%.
+
+**Thresholds v4** were created on the real lab on 2026-10-19 (audit `gauntlet.thresholds`, actor `claude`). No card
+was re-judged.
 
 ### M1: data lake (done; kept for reference)
 

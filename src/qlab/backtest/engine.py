@@ -8,6 +8,16 @@ Timing (no look-ahead by construction):
 
 So bar t's return is ``(1 + target[t-2] * gap[t]) * (1 + target[t-1] * intraday[t]) - 1``, minus the cost of
 changing the position at bar t's open, plus the risk-free rate on uninvested money.
+
+Session strategies (M5) hold only one leg of each day:
+
+- ``overnight``: the target decided at close t-2 is bought at close t-1 and sold at open t, so bar t earns
+  ``target[t-2] * gap[t]``. Buying at a close needs the order in before the close is known, which is why the
+  decision is a day older than the close it trades at.
+- ``day``: the target decided at close t-1 is bought at open t and sold at close t, earning
+  ``target[t-1] * intraday[t]``.
+
+Either way every day with a position is a round trip, so it pays the cost twice.
 """
 
 from __future__ import annotations
@@ -47,6 +57,7 @@ COST_PRESETS: dict[str, CostModel] = {
     "crypto_xs": CostModel(commission_bps=10.0, spread_bps=10.0, slippage_bps=5.0),
     "zero": CostModel(0.0, 0.0, 0.0),
 }
+SESSIONS = ("all", "overnight", "day")
 
 
 @dataclass
@@ -81,6 +92,7 @@ def run(
     rf: pd.Series | None = None,
     use_adjusted: bool = True,
     with_trades: bool = True,
+    session: str = "all",
 ) -> BacktestResult:
     """Simulate holding a target position series.
 
@@ -92,11 +104,18 @@ def run(
         use_adjusted: Compute returns on dividend-adjusted prices when available.
         with_trades: Build the round-trip table. The gauntlet runs thousands of backtests that only need
             returns, and the table is most of the run time for strategies that trade often.
+        session: ``all`` (hold through day and night), ``overnight`` (close to next open only) or ``day`` (open
+            to close only); see the module docstring.
 
     Returns:
         A ``BacktestResult``. The first two bars carry no position (nothing could have been traded yet).
-        ``trades`` is empty when ``with_trades`` is False.
+        ``trades`` is empty when ``with_trades`` is False. For a session strategy ``position`` is the leg held.
+
+    Raises:
+        ValueError: Unknown session.
     """
+    if session not in SESSIONS:
+        raise ValueError(f"session must be one of {', '.join(SESSIONS)}")
     px = adjusted(bars) if use_adjusted else bars
     o = px["open"].to_numpy(float)
     c = px["close"].to_numpy(float)
@@ -109,10 +128,20 @@ def run(
     held = np.concatenate([[0.0], tgt[:-1]])  # filled at this bar's open
     overnight = np.concatenate([[0.0], held[:-1]])  # held from the previous close to this open
 
+    if session != "all":
+        # One leg per day, each a round trip: the other leg is flat.
+        leg = overnight if session == "overnight" else held
+        overnight, held = (leg, np.zeros_like(leg)) if session == "overnight" else (np.zeros_like(leg), leg)
     gross = (1.0 + overnight * gap) * (1.0 + held * intraday) - 1.0
-    cost = np.abs(held - overnight) * costs.per_unit
     rf_arr = np.zeros(len(c)) if rf is None else rf.reindex(bars.index).fillna(0.0).to_numpy(float)
-    cash = (1.0 - np.abs(held)) * rf_arr
+    if session == "all":
+        cost = np.abs(held - overnight) * costs.per_unit
+        cash = (1.0 - np.abs(held)) * rf_arr
+    else:
+        leg = overnight + held
+        cost = 2.0 * np.abs(leg) * costs.per_unit
+        cash = (1.0 - np.abs(leg)) * rf_arr
+        held = leg
     net = gross + cash - cost
 
     bench = np.nan_to_num(c / prev_close - 1.0)

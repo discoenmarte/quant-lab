@@ -1130,6 +1130,21 @@ def mine_propose(
     typer.echo(f"{prop.rejected} proposals rejected by the grammar, {prop.calls} model calls")
 
 
+@mine_app.command("truth")
+def mine_truth(report_id: str, workers: int = typer.Option(0, help="Processes; 0 uses all cores but one")) -> None:
+    """Measure the true edges of a mining calibration's admitted noise runs on long fresh noise markets.
+
+    Args:
+        report_id: Mining calibration report id.
+        workers: Processes.
+    """
+    from .mining import calibration as mc
+
+    for r in mc.add_truth(report_id, workers or None, log=typer.echo):
+        typer.echo(f"  {r['family']:<18} seed {r['seed']}: edge {r['edge']:+.2f} in the study, true edge "
+                   f"{r['true_edge']:+.2f} ({', '.join(f'{e:+.2f}' for e in r['true_edges'])})  {r['text']}")
+
+
 @app.command("calibrate-mining")
 def calibrate_mining(
     seed: int = typer.Option(400_000, help="Base seed; confirm a choice with a different one"),

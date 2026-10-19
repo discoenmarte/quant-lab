@@ -403,6 +403,9 @@ def test_miner_researcher_runs_the_unchanged_gauntlet():
     loose = mcal.rejudge(rep, {"dsr_min": 0.0})
     assert loose["noise"][0]["n"] == 1
     assert mcal.dsr_at(r["dsr_inputs"], 50.0, 252) <= mcal.dsr_at(r["dsr_inputs"], 1.0, 252) + 1e-12
+    assert r["mined"]["spec"]["kind"] == "bars"
+    truth = mcal._truth_one(("bars", r["mined"]["spec"], 5))
+    assert truth["record"]["strategy"].startswith("mined_") and "edge" in truth
 
 
 def test_static_panel_space_and_scoring():

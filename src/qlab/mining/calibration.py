@@ -54,6 +54,9 @@ NOISE_REPS = {"bars": 60, "panel": 40, "xs30": 30}
 POWER_REPS = {"bars": 20, "panel": 15, "xs30": 15}
 POWER_FAMILY = {"bars": "trend_sma", "panel": "portfolio/tsmom", "xs30": "xs30/xs_weekly_momentum"}
 KEEP = ("sharpe", "cagr", "max_dd", "n_obs", "edge_sharpe")
+TRUTH_YEARS = {"bars": 400.0, "panel": 150.0, "xs30": cal.XS_TRUTH_YEARS}  # long noise markets for true edges
+TRUTH_SEEDS = 4
+TRUTH_BASE = 888_000
 
 
 def market(kind: str, years: float, trend: float, seed: int) -> dict[str, Any]:
@@ -140,12 +143,79 @@ def mine_one(task: dict[str, Any]) -> dict[str, Any]:
     res["dsr_inputs"] = {k: d[k] for k in ("sr", "n", "skew", "kurt", "rho", "var_annual", "n_trials")}
     sig = grammar.signature(best.spec)
     res["mined"] = {"n_trials": out.n_trials, "n_valid": len(valid), "edge": best.edge, "gross_edge": best.gross_edge,
-                    "text": grammar.describe(best.spec), "signal": sig["signal"], "filter": sig["filter"],
-                    "exit": sig["exit"], "session": sig["session"], "sizing": sig["sizing"], "nodes": sig["nodes"],
+                    "spec": best.spec, "text": grammar.describe(best.spec), "signal": sig["signal"],
+                    "filter": sig["filter"], "exit": sig["exit"], "session": sig["session"], "sizing": sig["sizing"],
+                    "nodes": sig["nodes"],
                     "sr0": res["sr0_by"].get(task["th"].get("dsr_variance", "sample")),
                     "search_s": round(t_search, 1), "total_s": round(time.perf_counter() - t0, 1)}
     res["miner_records"] = records
     return res
+
+
+def _truth_one(args: tuple[str, dict[str, Any], int]) -> dict[str, Any]:
+    """Edge of one mined spec on one long noise market (a pool worker).
+
+    Args:
+        args: ``(market type, spec, seed)``.
+
+    Returns:
+        ``edge`` (annual edge Sharpe after costs) and ``record`` (a compact trial for the ledger).
+    """
+    kind, spec, seed = args
+    data = market(kind, TRUTH_YEARS[kind], 0.0, seed)
+    ev = Evaluator.synthetic(**data, leak_cuts=0)
+    r = ev.evaluate(grammar.normalize(spec, ev.space), keep_daily=False)
+    return {"edge": r.edge if r.ok else float("nan"),
+            "record": {"strategy": r.name, "params": r.params, "start": ev.research[0], "end": ev.research[1],
+                       "metrics": {k: r.metrics.get(k) for k in KEEP}}}
+
+
+def admitted_noise(report: dict[str, Any], pool: ProcessPoolExecutor, log: Callable[[str], None] = print,
+                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """How much edge the noise runs that passed really have: each winner on long fresh noise markets.
+
+    A noise market is meant to give every rule zero edge. If a winner earns a clear edge on markets ten times
+    longer, the synthetic market had something to find (decision 0005: volatility timing earns a real edge when
+    volatility clusters and the drift is positive) and the pass is a true positive of that world, not luck. A
+    winner whose spec wasn't saved (reports before the spec was kept) is found again by repeating its search,
+    which is deterministic; the repeat must reach the same edge.
+
+    Args:
+        report: A mining calibration report with ``runs``.
+        pool: Process pool.
+        log: Progress callback.
+
+    Returns:
+        ``(rows, records)``: one row per admitted noise run (``family, seed, edge, true_edge, true_edges,
+        reproduced, text``) and the trial records of the long-market backtests.
+
+    Raises:
+        RuntimeError: A repeated search didn't reach the recorded edge.
+    """
+    runs = [r for r in report["runs"] if r["scenario"] == "noise_mined" and r["admitted"]]
+    todo = [r for r in runs if not r["mined"].get("spec")]
+    if todo:
+        log(f"repeating {len(todo)} searches to recover their winners")
+        tasks = [{k: r[k] for k in ("scenario", "family", "market", "paradigm", "years", "trend", "seed")}
+                 | {"budget": report["settings"]["budget"][r["market"]], "th": report["thresholds"]} for r in todo]
+        for r, again in zip(todo, pool.map(mine_one, tasks), strict=True):
+            if abs(again["mined"]["edge"] - r["mined"]["edge"]) > 1e-9:
+                raise RuntimeError(f"{r['family']} seed {r['seed']} didn't repeat: {again['mined']['edge']} vs "
+                                   f"{r['mined']['edge']}")
+            r["mined"]["spec"] = again["mined"]["spec"]
+            r["mined"]["reproduced"] = True
+    jobs = [(r["market"], r["mined"]["spec"], TRUTH_BASE + k) for r in runs for k in range(1, TRUTH_SEEDS + 1)]
+    got = list(pool.map(_truth_one, jobs))
+    rows, records = [], []
+    for i, r in enumerate(runs):
+        part = got[i * TRUTH_SEEDS:(i + 1) * TRUTH_SEEDS]
+        edges = [g["edge"] for g in part]
+        records += [g["record"] for g in part]
+        rows.append({"family": r["family"], "seed": r["seed"], "edge": r["mined"]["edge"],
+                     "true_edge": float(np.nanmean(edges)), "true_edges": edges,
+                     "reproduced": bool(r["mined"].get("reproduced")), "text": r["mined"]["text"],
+                     "sizing": r["mined"]["sizing"], "filter": r["mined"]["filter"]})
+    return rows, records
 
 
 def tasks_for(th: dict[str, Any], base_seed: int, paradigms: tuple[str, ...], budget: dict[str, int],
@@ -308,6 +378,8 @@ def run_study(
             runs.append(fut.result())
             if i % 25 == 0 or i == len(tasks):
                 log(f"  {i}/{len(tasks)} runs done ({time.perf_counter() - started:.0f} s)")
+        truth_rows, truth_records = admitted_noise(
+            {"runs": runs, "settings": {"budget": budget}, "thresholds": th}, pool, log)
 
     trials = []
     for i, r in enumerate(runs):
@@ -329,12 +401,17 @@ def run_study(
                      "n_trials": len(trials), "base_seed": base_seed, "code": code},
         **cal.summarise(runs, th),
         "benchmark": benchmark(runs),
+        "admitted_noise": truth_rows,
+        "truth": {"years": TRUTH_YEARS, "seeds": TRUTH_SEEDS, "base_seed": TRUTH_BASE},
         "runs": [{k: r[k] for k in ("scenario", "family", "market", "paradigm", "years", "trend", "seed", "values",
                                     "admitted", "failed_stage", "mined", "dsr_by", "sr0_by", "dsr_inputs",
                                     "true_edge") if k in r}
                  for r in runs],
         "elapsed_s": round(time.perf_counter() - started, 1),
     }
+    trials.extend({**rec, "question": f"calib:{run_id}:truth", "family": "mine/truth", "symbol": "SYNTH",
+                   "source": "calibration"} for rec in truth_records)
+    report["settings"]["n_trials"] = len(trials)
     report["headline"] = headline(report)
     path = config.reports_dir() / "calibration" / f"{run_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,6 +421,32 @@ def run_study(
     audit.log("gauntlet.calibrate", target=run_id, actor=actor,
               details={"kind": "mining", "runs": len(runs), "trials": len(trials), "fpr": report["fpr_overall"]})
     return clean(report)
+
+
+def add_truth(run_id: str, workers: int | None = None, log: Callable[[str], None] = print) -> list[dict[str, Any]]:
+    """Measure the true edges of a saved study's admitted noise runs, save them in its report and record the trials.
+
+    Args:
+        run_id: Mining calibration report id.
+        workers: Processes; None uses all cores but one.
+        log: Progress callback.
+
+    Returns:
+        The ``admitted_noise`` rows.
+    """
+    rep = cal.load_report(run_id)
+    with ProcessPoolExecutor(max_workers=workers or max(1, (os.cpu_count() or 2) - 1)) as pool:
+        rows, records = admitted_noise(rep, pool, log)
+    rep["admitted_noise"] = rows
+    rep["truth"] = {"years": TRUTH_YEARS, "seeds": TRUTH_SEEDS, "base_seed": TRUTH_BASE,
+                    "added_at": naive_utc().isoformat(timespec="seconds")}
+    path = config.reports_dir() / "calibration" / f"{run_id}.json"
+    path.write_text(json.dumps(clean(rep)))
+    ledger.record_trials([{**rec, "question": f"calib:{run_id}:truth", "family": "mine/truth", "symbol": "SYNTH",
+                           "source": "calibration"} for rec in records])
+    audit.log("gauntlet.calibrate", target=run_id, actor="cli",
+              details={"kind": "mining_truth", "admitted_noise": len(rows), "trials": len(records)})
+    return rows
 
 
 def dsr_at(inputs: dict[str, Any], n_factor: float, dpy: int) -> float:

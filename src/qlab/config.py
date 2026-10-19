@@ -79,20 +79,30 @@ def env_file() -> Path:
     return data_dir() / "lab.env"
 
 
+def env_files() -> list[Path]:
+    """Files of ``NAME=value`` settings, in the order they are searched.
+
+    Returns:
+        ``<data>/lab.env``, then ``<repo>/.env``. Both are ignored by git.
+    """
+    return [env_file(), ROOT / ".env"]
+
+
 def setting(name: str, default: str | None = None) -> str | None:
-    """A setting from the environment, or else from ``lab.env``.
+    """A setting from the environment, or else from ``lab.env``, or else from the repository's ``.env``.
 
     Args:
         name: Variable name, e.g. ``QLAB_TELEGRAM_TOKEN``.
-        default: Value when neither source has it.
+        default: Value when no source has it.
 
     Returns:
         The value with surrounding whitespace and quotes removed, or ``default``.
     """
     if name in os.environ:
         return os.environ[name].strip()
-    path = env_file()
-    if path.exists():
+    for path in env_files():
+        if not path.exists():
+            continue
         for line in path.read_text().splitlines():
             key, sep, value = line.strip().partition("=")
             if sep and key.strip().removeprefix("export ").strip() == name:

@@ -29,7 +29,7 @@ MILESTONES = [
     {"id": "M5", "name": "Strategy mining", "status": "planned"},
     {"id": "M6", "name": "Registry, report, alerts", "status": "done"},
     {"id": "M7a", "name": "Forward paper book", "status": "done"},
-    {"id": "M7b", "name": "Broker paper trading", "status": "planned"},
+    {"id": "M7b", "name": "Broker paper trading", "status": "done"},
     {"id": "M8", "name": "Go-live gate", "status": "planned"},
     {"id": "M9", "name": "Intraday mode", "status": "planned"},
 ]

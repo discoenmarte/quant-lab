@@ -459,6 +459,18 @@ def paper_nightly(
         typer.echo(f"  run    [{r['status']:<8}] {r['question']:<34} {r['message']}")
     for r in res["score"]:
         typer.echo(f"  score  [{'ALARM' if r.get('alarm') else r['status']:<8}] {r['question']:<34} {r['message']}")
+    broker = res.get("broker") or {}
+    synced = broker.get("sync") or {}
+    if synced:
+        typer.echo(f"  broker sync: {synced.get('updated', 0)} orders updated, {synced.get('fills', 0)} new fills"
+                   + "".join(f", {k} {'reconciled' if v.get('ok') else 'MISMATCH'}"
+                             for k, v in (synced.get("reconciliation") or {}).items()))
+    for r in broker.get("execute") or []:
+        typer.echo(f"  broker [{r['status']:<14}] {r['entry_id']} decision {r['as_of']}: "
+                   f"{len(r['orders'])} orders" + (f"; {r['notes'][0]}" if r["notes"] else ""))
+        for o in r["orders"]:
+            typer.echo(f"      {o['side']:<4} {o['qty']:g} {o['symbol']:<9} {o['tif']:<4} {o['status']}"
+                       + (f"  {o['message'][:80]}" if o["message"] else ""))
     if res.get("error"):
         typer.echo(f"  error  {res['error']}")
     rep = res.get("report") or {}

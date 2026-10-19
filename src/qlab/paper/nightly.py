@@ -1,4 +1,5 @@
-"""The nightly job: ingest the free sources, record the book's decisions for the latest close, then score the book.
+"""The nightly job: ingest the free sources, record the book's decisions for the latest close, score the book, and
+build the daily report.
 
 Design:
 
@@ -7,6 +8,10 @@ Design:
   ``/api/paper/run`` and ``/api/paper/score``); otherwise it runs the same functions in this process.
 - **Every step runs even if an earlier one fails.** A failed ingest leaves stale data, which the run refuses on its
   own (see ``book.decide``), and scoring still updates the reports.
+- **The daily report comes last** (``qlab.report``, decision 0008). It gets the job's summary, records it in the
+  audit log, sends the headline as a digest and raises an alert if any step failed. A step that crashes still gets a
+  report. If the report itself fails (a bug, or a server that went away), the failure alert goes straight to the
+  alert channels without the database, so a broken night is never silent.
 - **Scheduling is the owner's choice.** ``render_launchd`` writes a launchd job from the template in
   ``ops/launchd`` and returns the install steps; nothing here installs it.
 """
@@ -25,6 +30,7 @@ import httpx
 
 from .. import config
 from ..config import EXCHANGE_TZ
+from ..timeutil import now_utc
 
 DEFAULT_API = "http://127.0.0.1:8765/api"
 LABEL = "com.quantlab.paper-nightly"
@@ -105,26 +111,99 @@ def _in_process(log: Callable[[str], None]) -> dict[str, Any]:
     return {"ingest": results, "run": book.run(actor="nightly"), "score": score.score(actor="nightly")}
 
 
+def summary(res: dict[str, Any], started: datetime, finished: datetime) -> dict[str, Any]:
+    """A compact record of one night's run, for the daily report and the audit log.
+
+    Args:
+        res: The job's result so far (``mode``, ``ingest``, ``run``, ``score``, ``ok`` and maybe ``error``).
+        started: When the job started (tz-aware).
+        finished: When its steps finished (tz-aware).
+
+    Returns:
+        ``ok, mode, started_at, finished_at, error``, ``ingest`` (per source: status, series and the first errors),
+        ``run`` (counts per decision status and the refusal messages) and ``score`` (counts and entries in alarm).
+    """
+    run, score = res.get("run", []), res.get("score", [])
+    return {
+        "ok": bool(res["ok"]), "mode": res["mode"], "error": res.get("error"),
+        "started_at": started.isoformat(timespec="seconds"), "finished_at": finished.isoformat(timespec="seconds"),
+        "ingest": [{"source": r["source"], "status": r["status"], "n_series": r.get("n_series", 0),
+                    "errors": [str(e) for e in r.get("errors", [])][:3]} for r in res.get("ingest", [])],
+        "run": {**{k: sum(r["status"] == k for r in run) for k in ("decided", "exists", "refused", "error")},
+                "messages": [r["message"] for r in run if r["status"] in ("refused", "error")][:5]},
+        "score": {"scored": sum(r["status"] == "scored" for r in score),
+                  "error": sum(r["status"] == "error" for r in score),
+                  "alarms": [r["entry_id"] for r in score if r.get("alarm")]},
+    }
+
+
+def _report(mode: str, api: str, summ: dict[str, Any]) -> dict[str, Any]:
+    """Build the daily report with the job's summary: through the API in API mode, here otherwise.
+
+    Args:
+        mode: ``"api"`` or ``"local"``.
+        api: Base URL of the API.
+        summ: Output of ``summary``.
+
+    Returns:
+        ``report_id``, ``headline`` and ``alerts`` (rule, title and delivery of each alert raised).
+    """
+    if mode == "api":
+        with httpx.Client(base_url=api, timeout=120) as client:
+            res = client.post("/report", json={"trigger": "nightly", "nightly": summ, "digest": True})
+            res.raise_for_status()
+            rep = res.json()
+    else:
+        from .. import report
+
+        rep = report.build(trigger="nightly", nightly=summ, send_digest=True, actor="nightly")
+    return {"report_id": rep["report_id"], "headline": rep["headline"],
+            "alerts": [{k: a[k] for k in ("rule", "severity", "title", "delivery")} for a in rep["alerts"]]}
+
+
 def nightly(api: str = DEFAULT_API, log: Callable[[str], None] = print, poll: float = 5.0,
-            timeout: float = 1800.0) -> dict[str, Any]:
-    """Ingest, decide and score, through the API when the server is running.
+            timeout: float = 1800.0, report: bool = True) -> dict[str, Any]:
+    """Ingest, decide, score and report, through the API when the server is running.
 
     Args:
         api: Base URL of the Lab API.
         log: Receives progress lines.
         poll: Seconds between ingest status checks (API mode).
         timeout: Most seconds to wait for the ingest (API mode).
+        report: Build the daily report and raise its alerts at the end.
 
     Returns:
-        ``mode`` (``"api"`` or ``"local"``), ``ingest``, ``run``, ``score`` and ``ok`` (False when a source failed
-        completely, or an entry was refused or failed).
+        ``mode`` (``"api"`` or ``"local"``), ``ingest``, ``run``, ``score``, ``ok`` (False when a source failed
+        completely, an entry was refused or failed, a step crashed or the report failed), ``error`` when a step
+        crashed, and ``report`` (``report_id``, ``headline``, ``alerts``, or ``error``) unless ``report`` is False.
     """
+    started = now_utc()
     mode = "api" if api_up(api) else "local"
     log(f"nightly paper job ({mode})")
-    out = _via_api(api, log, poll, timeout) if mode == "api" else _in_process(log)
+    error = None
+    try:
+        out = _via_api(api, log, poll, timeout) if mode == "api" else _in_process(log)
+    except Exception as err:  # a crashed step must still end in a report and an alert
+        out, error = {"ingest": [], "run": [], "score": []}, f"{type(err).__name__}: {err}"
+        log(f"the job stopped: {error}")
     bad_ingest = any(r["status"] == "error" for r in out["ingest"])
     bad_book = any(r["status"] in ("refused", "error") for r in out["run"] + out["score"])
-    return {"mode": mode, **out, "ok": not (bad_ingest or bad_book)}
+    res = {"mode": mode, **out, "ok": not (bad_ingest or bad_book or error)}
+    if error:
+        res["error"] = error
+    if report:
+        summ = summary(res, started, now_utc())
+        try:
+            res["report"] = _report(mode, api, summ)
+        except Exception as err:  # tell the owner without the database, which may be what failed
+            from .. import alerts
+
+            msg = f"{type(err).__name__}: {err}"
+            log(f"the daily report failed: {msg}")
+            res["report"], res["ok"] = {"error": msg}, False
+            alerts.deliver([alerts.nightly_alert({**summ, "ok": False, "report_error": msg},
+                                                 f"nightly:{summ['started_at']}")])
+    return res
 
 
 def default_time(tz: str | None = None) -> tuple[int, int]:

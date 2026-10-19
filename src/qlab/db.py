@@ -297,6 +297,42 @@ SCHEMA = [
         link VARCHAR,
         delivery VARCHAR
     )""",
+    # M5: strategy mining. Specs keep the structure behind every mined strategy name, so any trial or card can be
+    # rebuilt; jobs are the budgeted searches; budgets cap the trials per mining question (changes are audited).
+    """CREATE TABLE IF NOT EXISTS mining_specs (
+        strategy VARCHAR PRIMARY KEY,
+        kind VARCHAR,
+        space VARCHAR,
+        template VARCHAR,
+        spec VARCHAR,
+        text VARCHAR,
+        job_id VARCHAR,
+        created_at TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS mining_jobs (
+        job_id VARCHAR PRIMARY KEY,
+        created_at TIMESTAMP,
+        question VARCHAR,
+        scope VARCHAR,
+        paradigm VARCHAR,
+        status VARCHAR,
+        settings VARCHAR,
+        n_trials INTEGER,
+        best_strategy VARCHAR,
+        best_edge DOUBLE,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        message VARCHAR,
+        report_path VARCHAR,
+        actor VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS mining_budgets (
+        question VARCHAR PRIMARY KEY,
+        max_trials INTEGER,
+        updated_at TIMESTAMP,
+        reason VARCHAR,
+        actor VARCHAR
+    )""",
 ]
 
 

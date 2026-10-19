@@ -223,4 +223,29 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "back; a failed nightly job alerts every time. A forward edge outside its 90% band is not an alert, because "
         "that happens one day in ten by design.",
     },
+    "sleeve": {
+        "term": "Sleeve",
+        "short": "A paper-book entry's own slice of a paper broker account (10,000 by default).",
+        "long": "Its holdings and cash come from the lab's own fills, so several entries can share one account and "
+        "each keeps its own record. An entry trades only once the owner enrolls it, with a typed confirmation.",
+    },
+    "kill_switch": {
+        "term": "Kill switch",
+        "short": "Stops all paper trading at once: no new orders, open orders cancelled, every sleeve sold.",
+        "long": "Reducing risk is instant: two clicks in the top bar, no form. Coming back adds risk, so it needs the "
+        "word RESUME, a reason, and takes effect 24 hours later.",
+    },
+    "reconciliation": {
+        "term": "Reconciliation",
+        "short": "Checking the broker's holdings equal what the lab's own fills say they should be.",
+        "long": "Before its first order the lab stores the account's holdings as a baseline; after every sync each "
+        "holding must equal that baseline plus the lab's fills. A manual trade, a testnet reset or a missed fill shows "
+        "up as a mismatch and an alert.",
+    },
+    "slippage_vs_model": {
+        "term": "Slippage against the model",
+        "short": "How far a real fill was from the open price the backtest engine would have used, in basis points.",
+        "long": "Positive means the fill was worse than the model. The cost model charges half the spread plus "
+        "slippage (2 bps for ETFs); the fills show whether that was right.",
+    },
 }

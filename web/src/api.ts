@@ -636,6 +636,8 @@ export interface RegistryCard {
   oos_edge: number | null;
   perm_p: number | null;
   dsr: number | null;
+  /** Undeflated PSR (Sharpe > 0, N = 1), for cards rejected only at the luck stages; null otherwise. */
+  psr: number | null;
 }
 
 /** The registry: states in board order, counts and every card. */

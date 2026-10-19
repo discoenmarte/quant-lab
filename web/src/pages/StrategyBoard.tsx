@@ -105,6 +105,11 @@ function Tile({
         <span title="Edge Sharpe after costs">edge {num(card.edge)}</span>
         <span title="Permutation p-value">p {num(card.perm_p, 3)}</span>
         <span title="Deflated Sharpe ratio">DSR {num(card.dsr)}</span>
+        {card.psr !== null && card.psr !== undefined && (
+          <span title="Undeflated PSR: confidence the edge is above zero before deflating for the search (N = 1)">
+            PSR {num(card.psr)}
+          </span>
+        )}
       </div>
       {card.failed.length > 0 && (
         <div className="chips" title="Stages the card failed">
@@ -349,7 +354,8 @@ export function StrategyBoard() {
         ) : (
           <p className="small muted">
             Cards that failed at least one stage that tests how the rule behaves (costs, walk-forward, plateau, regimes,
-            diversification, lockbox). Kept for the record: they count in every later deflation.
+            diversification, lockbox), or missed the luck stages by more than a near-miss may (permutation p above 0.10
+            or undeflated PSR below 0.80). Kept for the record: they count in every later deflation.
           </p>
         )}
       </Card>

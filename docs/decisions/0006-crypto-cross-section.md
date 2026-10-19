@@ -231,6 +231,11 @@ rejects an edge that beats the index but still loses money. Whether that is the 
 a choice about goals, not statistics. Changing it should come with a calibration study on markets with drift,
 and applies only to later batches.
 
+**Answered on 2026-10-19.** The owner kept net CAGR > 0 in the costs stage (strategies should make money after costs)
+and made the regimes stage judge the edge. This was adopted as thresholds v4 after studies H and I (decision 0004,
+addendum "the regimes stage judges the edge"). Size power stays low (5-8% at an edge of 1.0), because net CAGR > 0
+still binds on zero-drift markets. The batch `23275b56` cards keep their v2 verdicts.
+
 ## Consequences
 
 - The lab has breadth for free: 588 pairs, up to 100 members a day, delisted pairs included.

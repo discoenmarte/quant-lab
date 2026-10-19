@@ -258,3 +258,114 @@ autocorrelation. No verdict would change: no candidate reached PSR 0.95 even und
 - Development checks (timing one run per market type, the card wording, a smoke run of the study) ran `evaluate`
   on synthetic markets in scratch labs, outside the real ledger. None used real data.
 - The two studies added 1,161,000 calibration trials, about 110 MB each, to `data/lab.duckdb`.
+
+## Addendum (2026-10-19): the regimes stage judges the edge (thresholds v4)
+
+### Problem
+
+Every stage judges the edge over the passive alternative (§1) except two, which judge absolute returns:
+
+- the costs stage's net CAGR > 0
+- the regimes stage, which passed when the net return was positive in at least 60% of regimes (bull, bear, calm,
+  turbulent)
+
+Decision 0006 (study E) found that these two stages blocked edges that beat a falling crypto index without making
+money. On zero-drift synthetic cross-sections they capped size-premium power at 5-10%. Zheng (2026) found the same in
+general: criteria on absolute returns reject true signals. The owner chose on 2026-10-19:
+
+- keep net CAGR > 0, because the lab is after strategies that make money after costs
+- make the regimes stage ask whether the **edge** is positive in at least 60% of regimes
+
+### Method
+
+`evaluate` now measures both quantities in each regime:
+
+- the mean daily edge (the candidate's edge returns, the same series every other stage uses), annualised
+- the net return, as before
+
+The threshold key `regime_basis` (`edge` or `net`) chooses which one the stage judges. The card shows both, and its
+summary says which one decided. Versions saved before the key keep `net` (`thresholds.LEGACY`), so earlier cards keep
+their verdicts. A calibration report summarises its runs under both bases (`by_regime_basis`). Re-judging a report
+from before the change on the edge is refused, because those runs never measured it.
+
+### Studies and the decision rule
+
+The rule was written before study H's results were seen:
+
+1. Adopt the edge only if every noise family (scenario × family) stays at or below 5% with it, in study H and in a
+   confirmation on fresh seeds (I).
+2. Report power, but don't use it to decide. The direction is the owner's choice. Calibration only guards against
+   letting noise through.
+3. If either study fails, keep the net return and don't tune `regime_min_share` to rescue it.
+
+Both studies ran `qlab calibrate --xs-reps 40 --xs-power-reps 20` under thresholds v3, which covers single
+instruments, portfolios and both crypto universes. Each had 2,840 runs and 666,280 trials. Both bases were judged on
+the same runs.
+
+- **Study H:** report `39bc09c3`, seeds 290,001+, 106 minutes.
+- **Study I:** report `d7ca1095`, seeds 330,001+, 110 minutes.
+
+**Noise** (1,880 runs per study: five single-instrument families with 100 runs per researcher type, three portfolio
+families with 40, eight crypto families with 40):
+
+| Study | Regimes judge | Noise, pooled | Worst family | Families above 5% |
+|---|---|---|---|---|
+| H | net return | 0.74% | tsmom fixed in advance, 3% | none |
+| H | **edge** | **0.69%** | tsmom fixed in advance, 3% | none |
+| I | net return | 0.90% | trend_sma fixed in advance, 5% | none |
+| I | **edge** | **0.90%** | trend_sma fixed in advance, 5% | none |
+| H + I | net return | 0.82% (31 of 3,760) | trend_sma fixed in advance, 3.5% (7 of 200) | |
+| H + I | **edge** | **0.80% (30 of 3,760)** | trend_sma fixed in advance, 3.5% | |
+
+No noise run was admitted on the edge and rejected on the net return. One went the other way: a Donchian rule in H.
+
+**What the stage was doing.** On the net return, the regimes stage passed 59-85% of noise candidates fixed in advance
+on single instruments, and 38-95% on portfolios. Those synthetic markets drift up 6% a year, so the stage mostly
+measured the market. On the edge it passes 17-35% of them.
+
+On crypto, which has zero drift, a candidate kept as the best of a grid passes more often on the edge (65-98%) than on
+the net return (35-72%). Its in-sample edge is positive by construction. The noise rates don't move, because the
+statistical stages hold them down.
+
+**Power** (pooled over H and I: 80 markets per single-instrument cell, 40 per portfolio and crypto cell):
+
+| Rule | True edge | Years | Net return | **Edge** |
+|---|---|---|---|---|
+| Trend (trend_sma) | 0.50 | 5 / 10 / 20 / 30 | 11% / 25% / 50% / 70% | 11% / 24% / 50% / 70% |
+| Trend (trend_sma) | 1.00 | 5 / 10 / 20 / 30 | 28% / 71% / 94% / 100% | **35% / 76% / 98% / 100%** |
+| Time-series momentum (same markets) | 0.53 | 5 / 10 / 20 / 30 | 10% / 18% / 36% / 57% | **14% / 20% / 41% / 61%** |
+| Portfolio trend, momentum (8 assets) | 0.5-2.0 | 10 / 18 | unchanged | unchanged |
+| Crypto momentum (top 30) | 0.98 | 4 / 5.6 | 57% / 92% | 55% / 92% |
+| Crypto size (top 30) | 1.00 | 4 / 5.6 | 0% / 5% | 0% / 8% |
+
+On single instruments a trend rule that steps aside in falling markets often loses money there, yet beats buy-and-hold.
+The edge counts that as a positive regime.
+
+**Why size power stays low.** On the edge, the size rule passes regimes 50-80% of the time, against 5-35% on the net
+return. Its costs stage then passes only 5-30%, because net CAGR > 0 still binds. At zero drift and about 80%
+volatility, almost every long-only crypto portfolio shrinks in compound terms.
+
+For the owner's information, not as a proposal: with regimes on the edge, dropping the CAGR condition would raise
+size power at an edge of 1.0 with 5.6 years from 3 of 40 to 12 of 40, and momentum power at 0.49 from 13 to 18 of 40,
+with no noise run admitted. That is what keeping "makes money after costs" costs in power on these markets.
+
+### Decision
+
+**Thresholds v4 = v3 with `regime_basis: edge`.**
+
+- Created on the real lab on 2026-10-19 (audit `gauntlet.thresholds`, actor `claude`). Fresh labs default to it.
+- The costs stage is unchanged: edge Sharpe after costs > 0 and net CAGR > 0.
+- No card was re-judged. Cards judged under v1-v3 keep their regimes result on the net return. Their stage summary
+  names the basis only from v4 on.
+
+### Disclosure
+
+- Both studies ran from a clean worktree of commit `f9bd039`, against the real `data/` folder. Their code stamp is
+  `0.1.0+f9bd039`, without `-dirty`. The shared checkout had other sessions' uncommitted changes, including the M7b
+  broker schema, which the studies didn't load.
+- The rule's 5% bound is met with no margin in study I. trend_sma fixed in advance admitted 5 of 100 under both
+  bases, the same five runs. That is a fluctuation of the gates as they were (3.5% pooled over the two studies), not
+  something this change caused.
+- Development checks (one noise run each for a single-instrument, a portfolio and a crypto family, and the tests) ran
+  `evaluate` on synthetic markets in scratch labs, outside the real ledger. None used real data.
+- The two studies added 1,332,560 calibration trials to `data/lab.duckdb`, under `calib:` questions.

@@ -197,10 +197,11 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "near_miss": {
         "term": "Near-miss",
-        "short": "Rejected only by the luck stages: the permutation test or the Deflated Sharpe.",
+        "short": "Rejected only by the luck stages (permutation test, Deflated Sharpe), and close to their bar.",
         "long": "It passed every check of how the rule behaves (costs, out of sample, neighbours, regimes) but its "
-        "edge was measured too imprecisely to tell from luck. Worth free forward days in the paper book, not money. "
-        "Near is about which stages failed, not by how much: read its p-value and DSR.",
+        "edge was measured too imprecisely to tell from luck. Close means a permutation p of at most 0.10 and an "
+        "undeflated PSR (the chance the edge is above zero, before deflating for the search) of at least 0.80. Worth "
+        "free forward days in the paper book, not money.",
     },
     "daily_report": {
         "term": "Daily lab report",

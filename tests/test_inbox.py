@@ -292,7 +292,8 @@ def test_the_digest_lists_what_waits_for_review_and_alerts():
     triage.triage(10, llm=FakeLLM(GOOD, {**GOOD, "is_strategy": False}))
     spec.draft("2610.11111", llm=FakeLLM(SPEC))
     rep = digest.digest(now=datetime.now(UTC))
-    assert "2 new papers" in rep["headline"][0] and len(rep["waiting"]) == 1
+    assert rep["headline"][0].startswith("2 papers arrived") and "1 scored 1/7 or more" in rep["headline"][0]
+    assert len(rep["waiting"]) == 1
     assert digest.latest_digest()["digest_id"] == rep["digest_id"]
     assert db.scalar("SELECT count(*) FROM alerts WHERE rule = 'inbox_digest'") == 1
 

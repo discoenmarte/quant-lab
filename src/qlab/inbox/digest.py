@@ -104,15 +104,17 @@ def digest(days: int = 7, now: datetime | None = None, notify: bool = True, acto
     now = now or now_utc()
     since = naive_utc(now - timedelta(days=days))
     seen = int(db.scalar("SELECT count(*) FROM papers WHERE fetched_at >= ?", [since]) or 0)
-    top = [p for p in triage.latest(1, 400)
-           if p["triaged_at"] and datetime.fromisoformat(str(p["triaged_at"])) >= since][:10]
+    scored = [p for p in triage.latest(1, 5000)
+              if p["triaged_at"] and datetime.fromisoformat(str(p["triaged_at"])) >= since]
+    top = scored[:10]
     waiting = [s for s in spec.specs() if s["status"] in ("draft", "needs_code")]
     replications = [s for s in spec.specs() if s["results"] and s["status"] in ("replicated", "not_replicated")]
     judged = [s for s in spec.specs("judged")]
     usage = db.rows("""SELECT count(*) AS calls, coalesce(sum(seconds), 0) AS seconds,
                               coalesce(sum(tokens_in + tokens_out), 0) AS tokens, coalesce(sum(cost_usd), 0) AS cost
                        FROM llm_calls WHERE ts >= ?""", [since])[0]
-    headline = [f"{seen} new papers in the last {days} days; {len(top)} scored on the rubric at 1/7 or more."]
+    headline = [f"{seen} papers arrived in the last {days} days; {len(scored)} scored 1/7 or more on the rubric, "
+                f"{sum(p['score'] >= 5 for p in scored)} of them 5/7 or more."]
     if top:
         best = top[0]
         headline.append(f"Best: {best['title'][:90]} ({best['score']}/7): {best['one_line'] or ''}"[:220])

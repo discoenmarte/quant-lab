@@ -11,23 +11,29 @@ Design (decision 0008):
   2. ``retired``: the owner retired it, or its paper entry was retired and none is active.
   3. ``validated``: it passed every stage, the lockbox included.
   4. ``candidate``: it passed stages 1-9 and its lockbox is still sealed.
-  5. ``near_miss``: rejected, and every stage it failed is one of the two that ask whether the result is luck
-     (permutation, significance).
+  5. ``near_miss``: rejected, every stage it failed is one of the two that ask whether the result is luck
+     (permutation, significance), and it missed by little: permutation p at most 0.10 and an undeflated PSR of at
+     least 0.80.
   6. ``rejected``: everything else.
 
 - **The verdict stays beside the state.** A rejected near-miss in the paper book is shown as ``in_paper_book`` with
   verdict ``rejected``, so nobody mistakes forward tracking for validation.
 - A near-miss is not "almost validated": its edge passed every check of how the rule behaves but was measured too
   imprecisely to tell from luck. Forward days add evidence on exactly that question, which is why the label exists.
+- **Caps on how far it missed** (the owner's choice, 2026-10-19): a card whose permutation p is above 0.10, or whose
+  edge is above zero with less than 80% confidence even before deflating for the search (PSR with N = 1), is too far
+  from the bar for forward days to settle the question in useful time.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime
 from typing import Any
 
-from . import audit, db
+from . import audit, config, db
+from .gauntlet import stats
 from .timeutil import naive_utc
 
 STATES = ["candidate", "validated", "in_paper_book", "near_miss", "rejected", "retired"]
@@ -43,11 +49,14 @@ DESCRIPTIONS = {
     "candidate": "Passed stages 1-9; the lockbox is still sealed.",
     "validated": "Passed every stage, the lockbox included.",
     "in_paper_book": "Tracked in the forward paper book (any verdict).",
-    "near_miss": "Rejected only at the luck stages (permutation, significance); worth forward days, not money.",
+    "near_miss": "Rejected only at the luck stages, close to the bar (p ≤ 0.10, PSR ≥ 0.80); worth forward days, "
+                 "not money.",
     "rejected": "Failed at least one stage that tests how the rule behaves.",
     "retired": "Retired by the owner, or its paper entry was retired.",
 }
 LUCK_STAGES = frozenset({"permutation", "significance"})
+NEAR_MISS_MAX_P = 0.10    # a near-miss's permutation p-value is at most this
+NEAR_MISS_MIN_PSR = 0.80  # and its undeflated PSR (Sharpe > 0, N = 1) at least this
 HEADLINE_STAGES = {"costs": "edge", "walk_forward": "oos_edge", "permutation": "perm_p", "significance": "dsr"}
 
 
@@ -67,16 +76,30 @@ def failed_stages(stages: list[dict[str, Any]]) -> list[str]:
     return [s["key"] for s in stages if s.get("passed") is False]
 
 
-def is_near_miss(verdict: str, stages: list[dict[str, Any]]) -> bool:
-    """Whether a card is a near-miss: rejected, and only at the stages that test for luck.
+def undeflated_psr(chart: dict[str, Any] | None) -> float:
+    """Confidence that a card's edge Sharpe is above zero, before deflating for the search (PSR with N = 1).
 
-    Such a card passed the look-ahead check, kept a positive edge and CAGR after costs, held up out of sample, on a
-    plateau of neighbouring parameters, across regimes and against the validated portfolio (where those stages
-    apply). Only the permutation test or the Deflated Sharpe stopped it. A card that failed its lockbox is never a
-    near-miss: the lockbox is the out-of-sample verdict.
+    Uses the autocorrelation-adjusted Sharpe variance, like the Deflated Sharpe on the card.
 
     Args:
-        verdict: Gauntlet verdict, ``candidate``, ``validated`` or ``rejected``.
+        chart: The card's significance chart, with the daily edge Sharpe ``sr``, ``skew``, ``kurt``, ``rho`` and
+            ``n`` (research days).
+
+    Returns:
+        A probability in [0, 1], or NaN when the chart is missing or incomplete.
+    """
+    try:
+        return stats.psr(float(chart["sr"]), 0.0, int(chart["n"]), float(chart["skew"]), float(chart["kurt"]),
+                         float(chart["rho"]))
+    except (KeyError, TypeError, ValueError):
+        return float("nan")
+
+
+def luck_only(verdict: str, stages: list[dict[str, Any]]) -> bool:
+    """Whether a card was rejected only at the stages that test for luck.
+
+    Args:
+        verdict: Gauntlet verdict.
         stages: Stage rows with ``key`` and ``passed``.
 
     Returns:
@@ -86,14 +109,38 @@ def is_near_miss(verdict: str, stages: list[dict[str, Any]]) -> bool:
     return verdict == "rejected" and bool(failed) and failed <= LUCK_STAGES
 
 
-def state_of(verdict: str, stages: list[dict[str, Any]], in_book: bool, retired: bool) -> str:
+def is_near_miss(verdict: str, stages: list[dict[str, Any]], psr: float) -> bool:
+    """Whether a card is a near-miss: rejected only at the stages that test for luck, and close to their bar.
+
+    Such a card passed the look-ahead check, kept a positive edge and CAGR after costs, held up out of sample, on a
+    plateau of neighbouring parameters, across regimes and against the validated portfolio (where those stages
+    apply). Only the permutation test or the Deflated Sharpe stopped it, and by little: its permutation p is at most
+    ``NEAR_MISS_MAX_P`` and its undeflated PSR at least ``NEAR_MISS_MIN_PSR``. A card that failed its lockbox is never
+    a near-miss: the lockbox is the out-of-sample verdict.
+
+    Args:
+        verdict: Gauntlet verdict, ``candidate``, ``validated`` or ``rejected``.
+        stages: Stage rows with ``key``, ``passed`` and ``value`` (the permutation stage's value is its p-value).
+        psr: The card's undeflated PSR (``undeflated_psr``); NaN never qualifies.
+
+    Returns:
+        True when ``luck_only`` holds and both caps are met.
+    """
+    if not luck_only(verdict, stages):
+        return False
+    p = next((s.get("value") for s in stages if s["key"] == "permutation"), None)
+    return p is not None and p <= NEAR_MISS_MAX_P and psr >= NEAR_MISS_MIN_PSR
+
+
+def state_of(verdict: str, stages: list[dict[str, Any]], in_book: bool, retired: bool, psr: float) -> str:
     """The lifecycle state of one card.
 
     Args:
         verdict: Gauntlet verdict.
-        stages: Stage rows with ``key`` and ``passed``.
+        stages: Stage rows with ``key``, ``passed`` and ``value``.
         in_book: The card has an active paper-book entry.
         retired: The owner retired the card, or one of its paper entries was retired.
+        psr: The card's undeflated PSR (``undeflated_psr``).
 
     Returns:
         One of ``STATES``, by the precedence in the module docstring.
@@ -104,7 +151,25 @@ def state_of(verdict: str, stages: list[dict[str, Any]], in_book: bool, retired:
         return "retired"
     if verdict in ("validated", "candidate"):
         return verdict
-    return "near_miss" if is_near_miss(verdict, stages) else "rejected"
+    return "near_miss" if is_near_miss(verdict, stages, psr) else "rejected"
+
+
+def _card_psr(card_id: str) -> float:
+    """The undeflated PSR of a saved report card, read from its significance chart.
+
+    Args:
+        card_id: Report card id.
+
+    Returns:
+        The PSR, or NaN when the card file or its chart is missing.
+    """
+    path = config.reports_dir() / "gauntlet" / f"{card_id}.json"
+    try:
+        card = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return float("nan")
+    chart = next((s.get("chart") for s in card.get("stages", []) if s.get("key") == "significance"), None)
+    return undeflated_psr(chart)
 
 
 def _latest(*values: Any) -> str | None:
@@ -127,7 +192,9 @@ def cards() -> list[dict[str, Any]]:
         One dict per card: ``card_id, created_at, question, family, strategy, scope, params, verdict,
         thresholds_version``, ``failed`` (stage keys), ``near_miss`` (the rule, whatever the state), ``state``,
         ``label``, ``since`` (when it entered the state, ISO UTC), ``entry_id`` (active paper entry or None),
-        ``interval`` and the headline stage values ``edge``, ``oos_edge``, ``perm_p`` and ``dsr``.
+        ``interval``, the headline stage values ``edge``, ``oos_edge``, ``perm_p`` and ``dsr``, and ``psr`` (the
+        undeflated PSR, read from the card file only for cards rejected at the luck stages alone, where it decides;
+        None otherwise).
     """
     rows = db.rows("SELECT * FROM gauntlet_cards ORDER BY created_at DESC, card_id")
     entries = db.rows("SELECT entry_id, card_id, status, added_at, retired_at FROM paper_entries ORDER BY added_at")
@@ -145,8 +212,9 @@ def cards() -> list[dict[str, Any]]:
     for r in rows:
         cid = r["card_id"]
         stages = json.loads(r["stages"] or "[]")
+        psr = _card_psr(cid) if luck_only(r["verdict"], stages) else float("nan")
         retired_at = _latest(retired_entry.get(cid), retired_event.get(cid))
-        state = state_of(r["verdict"], stages, cid in active, retired_at is not None)
+        state = state_of(r["verdict"], stages, cid in active, retired_at is not None, psr)
         if state == "in_paper_book":
             since = active[cid]["added_at"]
         elif state == "retired":
@@ -165,13 +233,14 @@ def cards() -> list[dict[str, Any]]:
             "verdict": r["verdict"],
             "thresholds_version": r["thresholds_version"],
             "failed": failed_stages(stages),
-            "near_miss": is_near_miss(r["verdict"], stages),
+            "near_miss": is_near_miss(r["verdict"], stages, psr),
             "state": state,
             "label": LABELS[state],
             "since": since,
             "entry_id": (active.get(cid) or {}).get("entry_id"),
             "interval": r["question"].rsplit(":", 1)[-1],
             **{name: values.get(key) for key, name in HEADLINE_STAGES.items()},
+            "psr": psr if math.isfinite(psr) else None,
         })
     return out
 

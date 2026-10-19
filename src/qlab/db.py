@@ -227,6 +227,63 @@ SCHEMA = [
         ok BOOLEAN,
         details VARCHAR
     )""",
+    # M4: the research inbox. Papers are stored once per arXiv id; triage keeps every model's verdict; specs map a
+    # paper onto an existing strategy template and carry the owner's review; llm_calls is the cost meter.
+    """CREATE TABLE IF NOT EXISTS papers (
+        arxiv_id VARCHAR PRIMARY KEY,
+        version INTEGER,
+        title VARCHAR,
+        abstract VARCHAR,
+        authors VARCHAR,
+        categories VARCHAR,
+        primary_cat VARCHAR,
+        published TIMESTAMP,
+        updated TIMESTAMP,
+        url VARCHAR,
+        pdf_url VARCHAR,
+        fetched_at TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS paper_triage (
+        arxiv_id VARCHAR,
+        triaged_at TIMESTAMP,
+        provider VARCHAR,
+        model VARCHAR,
+        prompt_version VARCHAR,
+        is_strategy BOOLEAN,
+        score INTEGER,
+        dots VARCHAR,
+        asset_class VARCHAR,
+        frequency VARCHAR,
+        one_line VARCHAR,
+        why VARCHAR,
+        status VARCHAR,
+        error VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS strategy_specs (
+        spec_id VARCHAR PRIMARY KEY,
+        arxiv_id VARCHAR,
+        created_at TIMESTAMP,
+        provider VARCHAR,
+        model VARCHAR,
+        spec VARCHAR,
+        status VARCHAR,
+        reviewed_at TIMESTAMP,
+        reviewer VARCHAR,
+        review_reason VARCHAR,
+        results VARCHAR,
+        card_id VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS llm_calls (
+        ts TIMESTAMP,
+        purpose VARCHAR,
+        provider VARCHAR,
+        model VARCHAR,
+        seconds DOUBLE,
+        tokens_in INTEGER,
+        tokens_out INTEGER,
+        cost_usd DOUBLE,
+        ok BOOLEAN
+    )""",
     # M6: every alert raised, with what each channel did with it.
     """CREATE TABLE IF NOT EXISTS alerts (
         alert_id VARCHAR PRIMARY KEY,

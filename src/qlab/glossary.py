@@ -276,4 +276,62 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "long": "McLean & Pontiff (2016) found anomaly returns fall by about half after publication. A paper "
         "published after the lockbox date has no such data, so its forward evidence comes from the paper book.",
     },
+    "mining": {
+        "term": "Strategy mining",
+        "short": "A budgeted search over a grammar of signals, filters, exits and sizing, for rules nobody wrote by "
+        "hand.",
+        "long": "Candidates are built only from the grammar: the lab's own rules, or formulas of operators on prices "
+        "and volume that can read only the past. Every candidate evaluated is a ledger trial on the scope's mining "
+        "question, so N rises with every try, and the best is judged by the same gauntlet as any idea. Mining has the "
+        "weakest evidence of any source (Allen & Karjalainen, 1999; FactorBench, 2026).",
+    },
+    "mining_budget": {
+        "term": "Mining budget",
+        "short": "The most trials the lab may spend mining one scope; raising it needs a reason.",
+        "long": "Every mined trial counts in the Deflated Sharpe of everything later tested on that scope, mined or "
+        "not, so a budget caps how much a search can raise the bar. Changes are written to the audit log.",
+    },
+    "mining_race": {
+        "term": "Best so far against the luck threshold",
+        "short": "The best edge a search has found next to the best edge luck alone would reach after as many trials.",
+        "long": "The luck line is the Deflated Sharpe's expected maximum among N trials with no edge, from the spread "
+        "of the trials' Sharpes (capped at what luck can produce). A smarter search raises the best find, but it "
+        "raises N too; what matters is whether the best outruns the line. Gençay (2026) calls it the evaporation "
+        "curve.",
+    },
+    "originality": {
+        "term": "Like a known rule",
+        "short": "The largest correlation of a mined rule's daily edge with the lab's known rules on the same scope.",
+        "long": "Each job first runs the lab's rules at their published defaults. A mined rule that moves with one of "
+        "them is mostly that rule in disguise; FactorBench (2026) found most mined predictiveness was known "
+        "exposures.",
+    },
+    "search_coverage": {
+        "term": "Search-space coverage",
+        "short": "How often each kind of signal was tried with each filter, exit, session and sizing.",
+        "long": "Shows where a search spent its trials and where it found its best edges. A search that never left "
+        "one corner says little about the rest of the grammar.",
+    },
+    "mining_rationale": {
+        "term": "Economic rationale",
+        "short": "Why the local model expects an idea to earn money after costs, written before any result is seen.",
+        "long": "The model never sees a backtest. Its proposals must fit the grammar and carry a rationale, or they "
+        "are sent back once with the reasons; ideas it can't express come back as notes. Nothing it writes is "
+        "executed.",
+    },
+    "mining_calibration": {
+        "term": "Calibration at mining scale",
+        "short": "How often a miner that searches pure noise gets its best through the gauntlet; the target is 5% or "
+        "less.",
+        "long": "Random, Bayesian and genetic-programming miners search synthetic markets with no edge, or a planted "
+        "one, for the same budget, and submit their in-sample best, deflated against every trial they made. Adaptive "
+        "search is the hard case: its trials crowd where earlier ones scored well. Decision 0011.",
+    },
+    "session": {
+        "term": "Session (overnight or day only)",
+        "short": "A mined rule may hold only overnight (close to next open) or only during the day (open to close).",
+        "long": "Every day it holds is a round trip, so it pays costs twice. The overnight premium in US stocks is "
+        "large before costs and mostly gone after them. The paper book and the brokers trade at the open only, so "
+        "they refuse session rules for now.",
+    },
 }

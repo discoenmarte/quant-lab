@@ -545,9 +545,10 @@ def registry_list(state: str = typer.Option("", help="Only this state, e.g. near
         typer.echo(f"{registry.LABELS[s]} ({len(group)})")
         for c in group:
             nums = (f"edge {c['edge']:+.2f}" if c["edge"] is not None else "edge –") + (
-                f", p {c['perm_p']:.3f}" if c["perm_p"] is not None else "")
+                f", p {c['perm_p']:.3f}" if c["perm_p"] is not None else "") + (
+                f", PSR {c['psr']:.2f}" if c["psr"] is not None else "")
             failed = ", ".join(c["failed"]) or "none"
-            typer.echo(f"  {c['card_id']}  {c['question']:<38} {c['verdict']:<9} {nums:<24} failed: {failed}")
+            typer.echo(f"  {c['card_id']}  {c['question']:<38} {c['verdict']:<9} {nums:<34} failed: {failed}")
 
 
 @registry_app.command("retire")

@@ -31,7 +31,7 @@ NON_RESEARCH = ("calibration", "paper", "demo")
 MAX_QUESTIONS = 40
 MAX_ENTRY_LINES = 5
 CARD_KEYS = ("card_id", "created_at", "question", "family", "strategy", "scope", "verdict", "state", "label",
-             "near_miss", "failed", "since", "entry_id", "interval", "edge", "oos_edge", "perm_p", "dsr")
+             "near_miss", "failed", "since", "entry_id", "interval", "edge", "oos_edge", "perm_p", "dsr", "psr")
 
 
 def _events(action: str, since: str | None) -> list[dict[str, Any]]:
@@ -225,7 +225,8 @@ def headline(rep: dict[str, Any]) -> list[dict[str, str]]:
         passed = [c for c in v if c["verdict"] in ("candidate", "validated")]
         parts = [_plural(len(passed), "candidate"), _plural(len(by["near_miss"]), "near-miss", "near-misses"),
                  f"{sum(c['verdict'] == 'rejected' and not c['near_miss'] for c in v):,} rejected"]
-        names = [c["question"] for c in passed] + [f"{c['question']} (near-miss)" for c in by["near_miss"]]
+        names = [c["question"] for c in passed] + [f"{c['question']} (near-miss: p {c['perm_p']:.3f}, PSR "
+                                                   f"{c['psr']:.2f})" for c in by["near_miss"]]
         text = f"{_plural(len(v), 'new report card')}: {', '.join(parts)}" + (f": {', '.join(names[:4])}" if names
                                                                            else "") + "."
         out.append({"topic": "verdicts", "tone": "good" if passed else "info", "text": text})

@@ -76,6 +76,7 @@ def backtest(
     end: str | None = None,
     record_as: str | None = "studio",
     include_lockbox: bool = False,
+    history_from: str | None = None,
 ) -> tuple[Panel, PortfolioResult, dict[str, Any]]:
     """Backtest a portfolio strategy and, unless told not to, record it in the ledger.
 
@@ -87,9 +88,13 @@ def backtest(
         end: Last date, ``YYYY-MM-DD``; clamped to the day before the lockbox unless ``include_lockbox``.
         record_as: Ledger source tag; None skips recording.
         include_lockbox: Let the run reach into the sealed period, spending this question's lockbox.
+        history_from: An earlier date to load data from, so the rule's signals are already formed on ``start``
+            (a 12-month rule started cold spends its first year flat). Metrics and the trial cover only
+            ``start``..``end``; None loads from ``start``.
 
     Returns:
-        ``(panel, result, summary)``; the summary holds metrics against equal weight, the trial id and N.
+        ``(panel, result, summary)``; the summary holds metrics against equal weight, the trial id and N. With
+        ``history_from`` the panel and result include the history; the summary doesn't.
 
     Raises:
         KeyError: Unknown universe or strategy.
@@ -98,15 +103,19 @@ def backtest(
     """
     strat = REGISTRY[strategy]
     full_params = {**strat.defaults(), **(params or {})}
-    panel = clip_to(load_panel(universe), start, end if include_lockbox else lockbox.clamp_end(end))
+    warm = bool(history_from and start and history_from < start)
+    panel = clip_to(load_panel(universe), history_from if warm else start,
+                    end if include_lockbox else lockbox.clamp_end(end))
     check_fit(strat, panel)
-    if len(panel.ts) < 2:
+    i0 = int(np.searchsorted(panel.ts, pd.Timestamp(start, tz="UTC"))) if warm else 0
+    if len(panel.ts) - i0 < 2:
         raise ValueError("no dates in the requested period before the lockbox")
     res = run_portfolio(panel, strat.weights(panel, full_params))
-    stats = metrics.summary(pd.Series(res.net), pd.Series(panel.rf), panel.dpy,
-                            benchmark=pd.Series(res.benchmark))
-    stats["gross_exposure"] = float(np.abs(res.held).sum(axis=1).mean())
-    stats["turnover"] = float(res.turnover.sum() / len(panel.ts) * panel.dpy)
+    m = slice(i0, None)
+    stats = metrics.summary(pd.Series(res.net[m]), pd.Series(panel.rf[m]), panel.dpy,
+                            benchmark=pd.Series(res.benchmark[m]))
+    stats["gross_exposure"] = float(np.abs(res.held[m]).sum(axis=1).mean())
+    stats["turnover"] = float(res.turnover[m].sum() / (len(panel.ts) - i0) * panel.dpy)
     question = question_of(strat.family, universe)
     summary: dict[str, Any] = {
         "question": question,
@@ -115,8 +124,9 @@ def backtest(
         "params": full_params,
         "universe": universe,
         "symbols": panel.symbols,
-        "start": str(panel.ts[0].date()),
+        "start": str(panel.ts[i0].date()),
         "end": str(panel.ts[-1].date()),
+        "history_from": str(panel.ts[0].date()) if warm else None,
         "metrics": stats,
         "trial_id": None,
     }

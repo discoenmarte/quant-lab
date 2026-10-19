@@ -262,6 +262,44 @@ def _write_spy(n: int = 6000, start: str = "2000-01-03") -> None:
         "adj_close": close})))
 
 
+def test_a_run_with_history_is_positioned_when_its_window_opens(monkeypatch):
+    """With ``history_from`` a 200-day rule holds its position on the window's first day instead of sitting flat
+    through its warm-up; metrics, the trial and the summary cover only the window."""
+    from qlab.backtest import runner as bar_runner
+    from qlab.portfolio import panel as panel_mod
+    from qlab.portfolio import runner as portfolio_runner
+
+    _write_spy()
+    params = {"window": 200, "entry_band": 0.0, "exit_band": 0.0}
+    cold_res, cold = bar_runner.backtest("yahoo", "SPY", "1d", "trend_sma", params, "auto", "2010-01-04",
+                                         "2012-12-31")
+    warm_res, warm = bar_runner.backtest("yahoo", "SPY", "1d", "trend_sma", params, "auto", "2010-01-04",
+                                         "2012-12-31", history_from="2008-01-01")
+    assert cold["start"] == warm["start"] == "2010-01-04" and warm["history_from"] == "2008-01-01"
+    assert cold_res.position.iloc[:200].abs().sum() == 0
+    first = int((warm_res.ts >= pd.Timestamp("2010-01-04", tz="UTC")).to_numpy().argmax())
+    assert warm_res.position.iloc[first:first + 200].abs().sum() > 0
+    trial = db.rows("SELECT start_date FROM trials WHERE trial_id = ?", [warm["trial_id"]])[0]
+    assert str(trial["start_date"])[:10] == "2010-01-04"
+
+    rng = np.random.default_rng(5)
+    for sym in ("SPY", "TLT", "GLD"):
+        close = 100 * np.exp(np.cumsum(rng.normal(0.0003, 0.01, 3000)))
+        ts = pd.bdate_range("2000-01-03", periods=3000, tz="UTC")
+        store.write_series("yahoo", sym, "1d", normalize_bars(pd.DataFrame({
+            "ts": ts, "open": close, "high": close * 1.01, "low": close * 0.99, "close": close, "volume": 1e6,
+            "adj_close": close})))
+    monkeypatch.setitem(panel_mod.UNIVERSES, "three", {"members": [("yahoo", s) for s in ("SPY", "TLT", "GLD")],
+                                                       "description": "test"})
+    p_cold, r_cold, s_cold = portfolio_runner.backtest("three", "tsmom", None, "2005-01-03", "2008-12-31")
+    p_warm, r_warm, s_warm = portfolio_runner.backtest("three", "tsmom", None, "2005-01-03", "2008-12-31",
+                                                       history_from="2003-01-01")
+    assert s_warm["start"] == s_cold["start"] == "2005-01-03" and s_warm["history_from"] == "2003-01-01"
+    i0 = int(np.searchsorted(p_warm.ts, pd.Timestamp("2005-01-03", tz="UTC")))
+    assert np.abs(r_cold.held[:200]).sum() == 0 and np.abs(r_warm.held[i0:i0 + 200]).sum() > 0
+    assert s_warm["metrics"]["sharpe"] != s_cold["metrics"]["sharpe"]
+
+
 def test_replication_compares_with_the_claim_and_tests_after_publication():
     """Both runs are ledger trials; a paper published after the research period has no post-publication run."""
     _write_spy()

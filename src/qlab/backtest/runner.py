@@ -121,6 +121,7 @@ def backtest(
     end: str | None = None,
     record_as: str | None = "studio",
     include_lockbox: bool = False,
+    history_from: str | None = None,
 ) -> tuple[BacktestResult, dict[str, Any]]:
     """Backtest a registered strategy and, unless told not to, record it in the ledger.
 
@@ -139,11 +140,13 @@ def backtest(
         record_as: Ledger source tag (``studio``, ``gauntlet``, ``mining``...). None skips recording, which
             only internal re-runs of an already-recorded trial should do.
         include_lockbox: Let the run reach into the sealed period, spending this question's lockbox.
+        history_from: An earlier date to load bars from, so the rule's signals are already formed on ``start``.
+            Metrics and the trial cover only ``start``..``end``; None loads from ``start``.
 
     Returns:
         ``(result, summary)`` where summary holds the metrics (including edge Sharpe), the trial id, N for the
         question, and ``lockbox`` (sealed date, whether this run included it, whether the question's lockbox
-        is spent).
+        is spent). With ``history_from`` the result includes the history; the summary doesn't.
 
     Raises:
         KeyError: Unknown strategy.
@@ -151,14 +154,19 @@ def backtest(
     """
     strat = REGISTRY[strategy]
     full_params = {**strat.defaults(), **(params or {})}
-    bars = load_bars(source, symbol, interval, start, end if include_lockbox else lockbox.clamp_end(end))
-    if bars.empty:
+    warm = bool(history_from and start and history_from < start)
+    bars = load_bars(source, symbol, interval, history_from if warm else start,
+                     end if include_lockbox else lockbox.clamp_end(end))
+    keep = (bars["ts"] >= pd.Timestamp(start, tz="UTC")).to_numpy() if warm else np.ones(len(bars), dtype=bool)
+    if not keep.any():
         raise ValueError("no bars in the requested period before the lockbox")
     model = resolve_costs(costs, source)
     rf = risk_free(source, bars, interval)
     result = run(bars, strat.positions(bars, full_params), model, rf)
     ppy = periods_per_year(source, interval)
-    stats = metrics.summary(result.returns, rf, ppy, result.position, benchmark=result.benchmark)
+    stats = metrics.summary(result.returns[keep], None if rf is None else rf[keep], ppy, result.position[keep],
+                            benchmark=result.benchmark[keep])
+    measured = bars["ts"][keep]
     question = f"{strat.family}:{symbol}:{interval}"
     summary: dict[str, Any] = {
         "question": question,
@@ -168,8 +176,9 @@ def backtest(
         "symbol": symbol,
         "interval": interval,
         "costs": model.__dict__,
-        "start": str(bars["ts"].iloc[0].date()) if len(bars) else None,
-        "end": str(bars["ts"].iloc[-1].date()) if len(bars) else None,
+        "start": str(measured.iloc[0].date()),
+        "end": str(measured.iloc[-1].date()),
+        "history_from": str(bars["ts"].iloc[0].date()) if warm else None,
         "metrics": stats,
         "trial_id": None,
     }

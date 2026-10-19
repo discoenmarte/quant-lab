@@ -7,6 +7,8 @@ Design (decision 0010):
   claimed one. The tolerance is the larger of 0.3 and two standard errors of a Sharpe estimate over that many years
   (``√((1 + SR²/2) / years)``): the lab trades ETFs or crypto where papers often used futures, stocks or other
   periods, so close is all that can be asked. A paper that claims no Sharpe ratio gets the run without a verdict.
+- Both runs load two years of **history** before their window (``HISTORY_DAYS``), so a 12-month rule is already
+  positioned when the window opens instead of sitting flat through its warm-up; only the window is measured.
 - **Post-publication** runs the same rule from the paper's publication date to the end of the research period.
   McLean & Pontiff (2016) found published anomalies lose about half their returns after publication; this is the
   lab's own check. Papers published after the lockbox date have no post-publication research data at all: their
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import date, timedelta
 from typing import Any
 
 from .. import audit, db, lockbox
@@ -28,6 +31,7 @@ from ..portfolio import runner as portfolio_runner
 from .spec import catalog, get
 
 SOURCE = "inbox"
+HISTORY_DAYS = 760  # calendar days loaded before a window: the longest lookback (378 bars) plus volatility windows
 
 
 def tolerance(sharpe: float, years: float) -> float:
@@ -46,33 +50,34 @@ def tolerance(sharpe: float, years: float) -> float:
 
 
 def _run(spec: dict[str, Any], start: str | None, end: str | None) -> dict[str, Any]:
-    """Run a spec's template once over a window and record it as a ledger trial.
+    """Run a spec's template once over a window, with history before it, and record it as a ledger trial.
 
     Args:
         spec: The spec (template, kind, target, params).
-        start: First date or None.
+        start: First date or None (the start of the data).
         end: Last date or None (clamped to the research period).
 
     Returns:
-        ``start, end, years, sharpe, edge_sharpe, cagr, max_dd, trial_id, question``.
+        ``start, end, years, sharpe, edge_sharpe, cagr, max_dd, trial_id, question, history_from``.
 
     Raises:
         ValueError: No data in the window.
         FileNotFoundError: The target's data isn't ingested.
     """
+    history = str(date.fromisoformat(start[:10]) - timedelta(days=HISTORY_DAYS)) if start else None
     if spec["kind"] == "portfolio":
-        panel, _, summary = portfolio_runner.backtest(spec["target"], spec["template"], spec["params"], start, end,
-                                                      record_as=SOURCE)
-        days = len(panel.ts) / panel.dpy
+        _, _, summary = portfolio_runner.backtest(spec["target"], spec["template"], spec["params"], start, end,
+                                                  record_as=SOURCE, history_from=history)
     else:
         source = catalog()["instruments"][spec["target"]]
-        res, summary = bar_runner.backtest(source, spec["target"], "1d", spec["template"], spec["params"], "auto",
-                                           start, end, record_as=SOURCE)
-        days = len(res.ts) / (365 if source == "binance" else 252)
+        _, summary = bar_runner.backtest(source, spec["target"], "1d", spec["template"], spec["params"], "auto",
+                                         start, end, record_as=SOURCE, history_from=history)
     m = summary["metrics"]
-    return {"start": summary["start"], "end": summary["end"], "years": round(days, 2), "sharpe": m.get("sharpe"),
+    years = (date.fromisoformat(summary["end"]) - date.fromisoformat(summary["start"])).days / 365.25
+    return {"start": summary["start"], "end": summary["end"], "years": round(years, 2), "sharpe": m.get("sharpe"),
             "edge_sharpe": m.get("edge_sharpe"), "cagr": m.get("cagr"), "max_dd": m.get("max_dd"),
-            "trial_id": summary["trial_id"], "question": summary["question"]}
+            "trial_id": summary["trial_id"], "question": summary["question"],
+            "history_from": summary.get("history_from")}
 
 
 def replicate(spec_id: str, actor: str = "user") -> dict[str, Any]:

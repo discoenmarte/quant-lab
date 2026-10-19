@@ -82,7 +82,9 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "term": "Deflated Sharpe Ratio (DSR)",
         "short": "PSR, but against the best Sharpe you'd expect from luck after N trials.",
         "long": "The lab's main gate. A DSR of 0.95 means a 95% confidence that the edge beats the best "
-        "result luck would produce after the trials already run on this instrument.",
+        "result luck would produce after the trials already run on this instrument. That best result grows with "
+        "how widely the trials' Sharpes spread. From thresholds v3 the spread counts only what luck can produce, "
+        "so a rule that loses its costs every day doesn't raise the bar for the others.",
     },
     "pbo": {
         "term": "Probability of Backtest Overfitting (PBO)",

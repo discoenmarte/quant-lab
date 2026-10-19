@@ -1,7 +1,6 @@
 """Command line entry point: ``qlab serve | init | ingest | backtest | portfolio | gauntlet | portfolio-gauntlet |
-calibrate | calibrate-variance | bench | demo | paper | report | registry | alerts``.
-
-More commands arrive with each milestone (inbox, mine).
+calibrate | calibrate-variance | calibrate-mining | bench | demo | paper | report | registry | alerts | broker | inbox |
+mine``.
 """
 
 from __future__ import annotations
@@ -923,6 +922,256 @@ def inbox_usage() -> None:
         typer.echo(f"  {r['provider']:<7} {r['model']:<14} {r['purpose']:<7} {r['calls']} calls ({r['ok']} ok), "
                    f"{r['seconds'] / 60:.1f} min, {r['tokens_in'] + r['tokens_out']:,} tokens, {r['cost_usd']:.2f} USD")
     typer.echo(f"this month: {u['month']['cost_usd']:.2f} of {u['month']['budget_usd']:.2f} USD budget")
+
+
+mine_app = typer.Typer(help="Strategy mining: budgeted searches over the grammar, every candidate a ledger trial",
+                       no_args_is_help=True)
+app.add_typer(mine_app, name="mine")
+
+
+def _print_job(rep: dict) -> None:
+    """Print a mining job's report: progress, the luck threshold it faces, and its top candidates.
+
+    Args:
+        rep: Job report.
+    """
+    p = rep.get("progress", {})
+    typer.echo(f"job {rep['job_id']}  {rep['question']}  {rep['paradigm']}  {rep['status']}  "
+               f"{p.get('n_trials', 0)} trials ({p.get('n_valid', 0)} scored)  {rep.get('message', '')}")
+    if p.get("N"):
+        typer.echo(f"  N = {p['N']} on the scope: luck alone reaches edge {p['sr0']:.2f}; DSR 0.95 needs about "
+                   f"{p['bar']:.2f}; best found {p.get('best_edge') or float('nan'):+.2f}")
+    for r in rep.get("reference", []):
+        typer.echo(f"  known  {r['rule']:<20} edge {r['edge'] if r['edge'] is not None else float('nan'):+.2f}")
+    for i, t in enumerate(rep.get("top", []), 1):
+        o = t.get("originality") or {}
+        typer.echo(f"  {i:>2}. {t['strategy']}  edge {t['edge']:+.2f} (gross {t['gross_edge']:+.2f})  DSR "
+                   f"{t['dsr']:.3f}  turnover {t['turnover'] or 0:.1f}/y  "
+                   f"corr {o.get('corr') if o.get('corr') is not None else float('nan'):+.2f} with {o.get('rule')}")
+        typer.echo(f"      {t['text']}")
+        if t.get("rationale"):
+            typer.echo(f"      why: {t['rationale']}")
+    for c in rep.get("cards", []):
+        typer.echo(f"  card {c['card_id']}: {c['strategy']} {c['verdict']}"
+                   + (f" at {c['failed_stage']}" if c.get("failed_stage") else ""))
+
+
+@mine_app.command("run")
+def mine_run(
+    scope: str = typer.Argument(..., help="A universe (crypto_top30, all_etfs...) or an instrument (SPY, BTCUSDT)"),
+    paradigm: str = typer.Option("gp", help="random, tpe, gp or llm"),
+    trials: int = typer.Option(500, help="Trials this job may evaluate (capped by the question's budget)"),
+    minutes: float = typer.Option(30.0, help="Wall-clock limit"),
+    seed: int = typer.Option(1, help="Random seed"),
+    workers: int = typer.Option(0, help="Processes; 0 uses up to 8"),
+    source: str = typer.Option("", help="Data source of an instrument; guessed when empty"),
+    ban: list[str] = typer.Option([], help="Operator, terminal, rule or component to leave out (repeatable)"),
+    hint: str = typer.Option("", help="Research direction for the llm paradigm"),
+    note: str = typer.Option("", help="Why this job"),
+    api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API; the job runs there when it is up"),
+) -> None:
+    """Mine one scope within a budget. Every candidate is a ledger trial on mined:<scope>:1d.
+
+    Args:
+        scope: Universe or instrument.
+        paradigm: Search paradigm.
+        trials: Trial budget of the job.
+        minutes: Time limit.
+        seed: Random seed.
+        workers: Evaluation processes.
+        source: Data source of an instrument.
+        ban: Parts of the grammar to leave out.
+        hint: Research direction for the language model.
+        note: Why.
+        api: Lab API address.
+    """
+    import os
+
+    import httpx
+
+    from .mining import jobs
+    from .paper.nightly import api_up
+
+    n_workers = workers or min(8, max(1, (os.cpu_count() or 2) - 1))
+    sc = jobs.parse_scope(scope, source)
+    body = {"kind": sc.kind, "name": sc.name, "source": sc.source, "paradigm": paradigm, "max_trials": trials,
+            "max_minutes": minutes, "seed": seed, "workers": n_workers, "banned": ban, "hint": hint, "note": note}
+    if api_up(api):
+        res = httpx.post(f"{api}/mining/jobs", json=body, timeout=30)
+        if res.status_code >= 400:
+            raise typer.BadParameter(res.json().get("detail", res.text))
+        job_id = res.json()["job_id"]
+        typer.echo(f"job {job_id} queued on the lab server; follow it with `qlab mine show {job_id}` or the Mining Lab")
+        return
+    row = jobs.create(sc, paradigm, trials, minutes, seed, n_workers, ban, hint, note, actor="cli")
+    _print_job(jobs.run(row["job_id"], log=typer.echo))
+
+
+@mine_app.command("jobs")
+def mine_jobs(limit: int = typer.Option(20, help="How many")) -> None:
+    """List recent mining jobs.
+
+    Args:
+        limit: Most rows.
+    """
+    from .mining import jobs
+
+    for j in jobs.jobs(limit):
+        best = f"{j['best_edge']:+.2f}" if j["best_edge"] is not None else "  –"
+        typer.echo(f"{j['job_id']}  {j['created_at'][:16]}  {j['question']:<28} {j['paradigm']:<6} {j['status']:<8} "
+                   f"{j['n_trials'] or 0:>5} trials  best {best}")
+
+
+@mine_app.command("show")
+def mine_show(job_id: str) -> None:
+    """Show a mining job's report.
+
+    Args:
+        job_id: Job id.
+    """
+    from .mining import jobs
+
+    _print_job(jobs.load(job_id))
+
+
+@mine_app.command("stop")
+def mine_stop(job_id: str, api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API")) -> None:
+    """Stop a job running on the lab server after its current batch.
+
+    Args:
+        job_id: Job id.
+        api: Lab API address.
+    """
+    import httpx
+
+    res = httpx.post(f"{api}/mining/jobs/{job_id}/stop", timeout=30)
+    typer.echo(res.json().get("detail", "stop requested") if res.status_code >= 400 else "stop requested")
+
+
+@mine_app.command("gauntlet")
+def mine_gauntlet(
+    job_id: str,
+    strategy: str = typer.Argument("", help="A mined_... name from the job; empty sends the best"),
+    seed: int = typer.Option(7, help="Gauntlet seed"),
+    api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API; the run happens there when it is up"),
+) -> None:
+    """Send a mined candidate to the gauntlet, judged like any other card.
+
+    Args:
+        job_id: Job id.
+        strategy: Candidate name; empty sends the job's best.
+        seed: Gauntlet seed.
+        api: Lab API address.
+    """
+    import httpx
+
+    from .mining import jobs
+    from .paper.nightly import api_up
+
+    name = strategy or jobs.load(job_id)["top"][0]["strategy"]
+    if api_up(api):
+        res = httpx.post(f"{api}/mining/jobs/{job_id}/gauntlet", json={"strategy": name, "seed": seed}, timeout=900)
+        if res.status_code >= 400:
+            raise typer.BadParameter(res.json().get("detail", res.text))
+        card = res.json()
+    else:
+        card = jobs.send_to_gauntlet(job_id, name, seed, actor="cli")
+    _print_card(card)
+
+
+@mine_app.command("budget")
+def mine_budget(
+    question: str = typer.Argument("", help="mined:<scope>:1d; empty lists every mining question"),
+    trials: int = typer.Option(-1, help="New cap on the question's mining trials"),
+    reason: str = typer.Option("", help="Why (required to change)"),
+) -> None:
+    """Show mining budgets, or set one question's cap.
+
+    Args:
+        question: Mining question.
+        trials: New cap; -1 only shows.
+        reason: Why.
+    """
+    from .mining import jobs
+
+    if question and trials >= 0:
+        jobs.set_budget(question, trials, reason, actor="cli")
+    rows = [jobs.budget_of(question)] if question else jobs.budgets()
+    for b in rows:
+        typer.echo(f"{b['question']:<30} {b['used']:>6} of {b['max_trials']:>6} trials used  ({b['reason']})")
+
+
+@mine_app.command("propose")
+def mine_propose(
+    scope: str = typer.Argument(..., help="Universe or instrument"),
+    n: int = typer.Option(5, help="Proposals"),
+    source: str = typer.Option("", help="Data source of an instrument"),
+    hint: str = typer.Option("", help="Research direction"),
+) -> None:
+    """Ask the local model for strategy ideas with rationales, validated against the grammar. Runs no backtest.
+
+    Args:
+        scope: Universe or instrument.
+        n: Proposals wanted.
+        source: Data source of an instrument.
+        hint: Research direction.
+    """
+    from .mining import grammar, jobs
+    from .mining.evaluate import Evaluator
+    from .mining.llm import Proposer, describe_scope
+
+    sc = jobs.parse_scope(scope, source)
+    space = Evaluator.for_scope(sc, leak_cuts=0).space
+    prop = Proposer(describe_scope(sc, space), hint=hint)
+    for spec, why in prop.propose(space, n):
+        typer.echo(f"- {grammar.describe(spec)}\n  why: {why}")
+    for idea in prop.outside:
+        typer.echo(f"- (outside the grammar) {idea}")
+    typer.echo(f"{prop.rejected} proposals rejected by the grammar, {prop.calls} model calls")
+
+
+@app.command("calibrate-mining")
+def calibrate_mining(
+    seed: int = typer.Option(400_000, help="Base seed; confirm a choice with a different one"),
+    workers: int = typer.Option(0, help="Worker processes; 0 uses all cores but one"),
+    scale: float = typer.Option(1.0, help="Multiply every market count (0.1 for a quick look)"),
+    budget_scale: float = typer.Option(1.0, help="Multiply every search budget"),
+    paradigms: str = typer.Option("random,tpe,gp", help="Comma-separated paradigms"),
+    markets: str = typer.Option("bars,panel,xs30", help="Comma-separated market types"),
+) -> None:
+    """Calibrate the gauntlet at mining scale: miners search synthetic noise and planted markets, submit their best.
+
+    Args:
+        seed: Base seed for the simulated markets.
+        workers: Worker processes.
+        scale: Factor on the market counts; a count above 0 keeps at least 1.
+        budget_scale: Factor on the trials per search.
+        paradigms: Paradigms to compare.
+        markets: Market types to include.
+    """
+    from .mining import calibration as mc
+
+    keep = [m.strip() for m in markets.split(",") if m.strip()]
+
+    def scaled(d: dict, f: float) -> dict:
+        return {k: (max(1, round(v * f)) if v and k in keep else 0) for k, v in d.items()}
+
+    rep = mc.run_study(seed, tuple(p.strip() for p in paradigms.split(",") if p.strip()),
+                       {k: max(10, round(v * budget_scale)) for k, v in mc.BUDGET.items()},
+                       scaled(mc.NOISE_REPS, scale), scaled(mc.POWER_REPS, scale), workers=workers or None,
+                       log=typer.echo, actor="cli")
+    typer.echo(f"\nReport {rep['id']} ({rep['elapsed_s']} s, {rep['settings']['n_trials']:,} trials recorded)")
+    for r in sorted(rep["noise"], key=lambda r: r["family"]):
+        typer.echo(f"  noise  {r['family']:<20} {r['admitted']:>3}/{r['n']:<4} {r['rate']:6.1%}  "
+                   f"[{r['low']:.1%}, {r['high']:.1%}]")
+    for r in sorted(rep["power"], key=lambda r: (r["family"], r["true_edge"] or 0)):
+        typer.echo(f"  power  {r['family']:<20} edge {r['true_edge']:.2f}  {r['admitted']:>3}/{r['n']:<4} "
+                   f"{r['rate']:6.1%}")
+    for b in rep["benchmark"]:
+        typer.echo(f"  {b['scenario']:<12} {b['family']:<20} best in-sample {b['best_edge'] or float('nan'):+.2f} "
+                   f"vs luck {b['sr0'] or float('nan'):.2f}; formulas {b['formula_share'] or 0:.0%}; "
+                   f"failed {b['failed']}")
+    typer.echo(rep["headline"])
 
 
 if __name__ == "__main__":

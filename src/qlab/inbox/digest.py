@@ -5,6 +5,9 @@ Design (decision 0010):
 - ``run`` is one pass of the inbox: new papers from arXiv, the rubric on each, and a draft spec for the few that
   score highest. It is meant for a weekly (or nightly) schedule the owner chooses; with a local 35B model a pass of
   100 abstracts takes several minutes.
+- The fetch is the newest listing of the q-fin categories plus the **frontier queries**: keyword searches
+  (``QUERIES``, or ``QLAB_INBOX_QUERIES`` separated by ``;``) that reach older papers on the strategies the lab can
+  test. The listing alone mostly brings this week's papers, few of which fit the lab's data.
 - ``digest`` summarises a period: papers seen, the best of them with their rubric dots, specs waiting for review,
   replications and gauntlet verdicts, and what the model calls cost. It is saved under ``reports/inbox`` and its
   headline is delivered through the alert channels (decision 0008), so the owner hears about new candidates
@@ -15,6 +18,7 @@ Design (decision 0010):
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -23,31 +27,56 @@ from .. import alerts, audit, config, db
 from ..timeutil import naive_utc, now_utc
 from . import feed, spec, triage
 
+QUERIES = ("time series momentum", "trend following", "moving average", "momentum cryptocurrency",
+           "bitcoin trading strategy", "asset allocation momentum", "volatility targeting")
+
+
+def queries() -> list[str]:
+    """The frontier queries: ``QLAB_INBOX_QUERIES`` (separated by ``;``) when set, else ``QUERIES``.
+
+    Returns:
+        Keyword queries, each a few words that must all appear in a paper.
+    """
+    raw = config.setting("QLAB_INBOX_QUERIES")
+    return [q.strip() for q in raw.split(";") if q.strip()] if raw else list(QUERIES)
+
 
 def run(max_papers: int = 100, triage_limit: int = 100, spec_min_score: int = 5, spec_limit: int = 3,
-        actor: str = "user", log=None) -> dict[str, Any]:
+        frontier: list[str] | None = None, per_query: int = 25, actor: str = "user", log=None,
+        sleep=time.sleep) -> dict[str, Any]:
     """One pass of the inbox: fetch, triage, draft specs for the best new papers, then the digest.
 
     Each step runs even if an earlier one failed (a dead arXiv doesn't stop triage of what is stored).
 
     Args:
-        max_papers: Most papers to fetch.
+        max_papers: Most papers to fetch from the newest listing.
         triage_limit: Most papers to triage in this pass.
         spec_min_score: Rubric score a paper needs for a draft spec.
         spec_limit: Most specs drafted in this pass.
+        frontier: Keyword queries to run after the listing; None uses ``queries()``, an empty list runs none.
+        per_query: Most papers per keyword query.
         actor: Who ran it.
         log: Receives progress lines.
+        sleep: Pause between arXiv calls (tests pass a no-op).
 
     Returns:
-        ``fetch`` (counts or error), ``triage`` (rows or error), ``specs`` (rows) and ``digest`` (the saved digest).
+        ``fetch`` (counts or error), ``frontier`` (counts or error per query), ``triage`` (rows or error),
+        ``specs`` (rows) and ``digest`` (the saved digest).
     """
     say = log or (lambda _msg: None)
-    out: dict[str, Any] = {}
+    out: dict[str, Any] = {"frontier": {}}
     try:
         out["fetch"] = feed.fetch_and_store(max_papers, actor=actor, log=say)
     except feed.FeedError as err:
         out["fetch"] = {"error": str(err)}
         say(f"fetch failed: {err}")
+    for words in queries() if frontier is None else frontier:
+        sleep(feed.PAUSE)
+        try:
+            out["frontier"][words] = feed.fetch_and_store(per_query, keywords=words, actor=actor, log=say)
+        except feed.FeedError as err:
+            out["frontier"][words] = {"error": str(err)}
+            say(f"query {words!r} failed: {err}")
     try:
         out["triage"] = triage.triage(triage_limit, actor=actor, log=say)
         out["specs"] = spec.draft_top(spec_min_score, spec_limit, actor=actor, log=say)

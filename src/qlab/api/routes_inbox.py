@@ -32,12 +32,14 @@ class RunRequest(BaseModel):
         triage_limit: Most papers to triage.
         spec_min_score: Rubric score needed for a draft spec.
         spec_limit: Most specs to draft.
+        frontier: Keyword queries to run after the listing; None uses the configured ones.
     """
 
     max_papers: int = 100
     triage_limit: int = 100
     spec_min_score: int = 5
     spec_limit: int = 3
+    frontier: list[str] | None = None
 
 
 class ReviewRequest(BaseModel):
@@ -91,7 +93,8 @@ def _job(job_id: str, req: RunRequest) -> None:
         job["log"].append(f"{now_utc().strftime('%H:%M:%S')} {msg}")
 
     try:
-        out = digest.run(req.max_papers, req.triage_limit, req.spec_min_score, req.spec_limit, actor="web", log=log)
+        out = digest.run(req.max_papers, req.triage_limit, req.spec_min_score, req.spec_limit, req.frontier,
+                         actor="web", log=log)
         job.update(status="done", digest=out["digest"]["headline"])
     except Exception as err:  # surfaced in the UI instead of dying silently
         job["status"] = "failed"

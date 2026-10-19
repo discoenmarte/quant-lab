@@ -224,6 +224,29 @@ def test_the_digest_lists_what_waits_for_review_and_alerts():
     assert db.scalar("SELECT count(*) FROM alerts WHERE rule = 'inbox_digest'") == 1
 
 
+def test_a_run_fetches_the_listing_then_each_frontier_query_and_survives_a_failed_one(monkeypatch):
+    """The run fetches the newest listing and every keyword query, pausing between calls; one failed query doesn't
+    stop the rest, and the configured queries replace the defaults."""
+    calls, pauses = [], []
+
+    def fake_fetch(max_papers, keywords="", actor="user", log=None):
+        calls.append((max_papers, keywords))
+        if keywords == "broken":
+            raise feed.FeedError("arXiv API answered HTTP 503")
+        return {"new": 1, "updated": 0, "seen": 0}
+
+    monkeypatch.setattr(feed, "fetch_and_store", fake_fetch)
+    monkeypatch.setattr(triage, "triage", lambda *a, **k: [])
+    monkeypatch.setattr(spec, "draft_top", lambda *a, **k: [])
+    out = digest.run(50, frontier=["trend following", "broken", "moving average"], per_query=10,
+                     sleep=pauses.append)
+    assert calls == [(50, ""), (10, "trend following"), (10, "broken"), (10, "moving average")]
+    assert len(pauses) == 3 and "error" in out["frontier"]["broken"]
+    assert out["frontier"]["moving average"]["new"] == 1 and "headline" in out["digest"]
+    monkeypatch.setenv("QLAB_INBOX_QUERIES", "carry; value  ;")
+    assert digest.queries() == ["carry", "value"]
+
+
 def test_the_inbox_api_reviews_and_refuses_when_the_model_is_down(monkeypatch):
     """Papers and specs are listed; review works over HTTP; drafting without a model is a 503."""
     feed.store(feed.parse_feed(FEED))

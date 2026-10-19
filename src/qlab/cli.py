@@ -786,18 +786,23 @@ def inbox_run(
     triage_limit: int = typer.Option(100, help="Most papers to score in this run"),
     spec_min_score: int = typer.Option(5, help="Rubric score needed for a draft spec"),
     spec_limit: int = typer.Option(3, help="Most specs to draft"),
+    query: list[str] = typer.Option(None, help="A keyword query (repeatable); default: the configured ones"),
+    no_queries: bool = typer.Option(False, help="Fetch only the newest listing"),
 ) -> None:
     """Fetch new papers, score them on the rubric, draft specs for the best, and send the digest.
 
     Args:
-        max_papers: Most papers to fetch.
+        max_papers: Most papers to fetch from the newest listing.
         triage_limit: Most papers to score.
         spec_min_score: Score needed for a spec.
         spec_limit: Most specs.
+        query: Keyword queries to run after the listing.
+        no_queries: Skip the keyword queries.
     """
     from .inbox import digest
 
-    out = digest.run(max_papers, triage_limit, spec_min_score, spec_limit, actor="cli", log=typer.echo)
+    frontier = [] if no_queries else (list(query) or None)
+    out = digest.run(max_papers, triage_limit, spec_min_score, spec_limit, frontier, actor="cli", log=typer.echo)
     for line in out["digest"]["headline"]:
         typer.echo(line)
 

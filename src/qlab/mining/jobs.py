@@ -379,7 +379,8 @@ class _Tracker:
         curve: Best-so-far points with the luck threshold at each N.
     """
 
-    def __init__(self, prior: list[float], n_days: int, dpy: int, method: str) -> None:
+    def __init__(self, prior: list[float], n_days: int, dpy: int, method: str,
+                 prior_len: list[float] | None = None) -> None:
         """Start tracking.
 
         Args:
@@ -387,8 +388,12 @@ class _Tracker:
             n_days: Research days (for the luck variance).
             dpy: Days per year.
             method: Spread method of the thresholds in force (``dsr_variance``).
+            prior_len: Each prior trial's calendar span as a multiple of the job's, aligned with ``prior``; None
+                means the same span. A shorter trial spreads wider by luck (decision 0004 addendum).
         """
-        self.prior = [x for x in prior if x is not None and math.isfinite(x)]
+        keep = [i for i, x in enumerate(prior) if x is not None and math.isfinite(x)]
+        self.prior = [prior[i] for i in keep]
+        self.prior_len = [prior_len[i] for i in keep] if prior_len is not None else [1.0] * len(keep)
         self.edges: list[float] = []
         self.gross: list[float] = []
         self.top: list[Result] = []
@@ -449,6 +454,20 @@ class _Tracker:
         th = self.threshold()
         self.curve.append({"n": self.n, "N": th["N"], "best": self.top[0].edge if self.top else None,
                            "sr0": th["sr0"], "bar": th["bar"]})
+
+
+def _days(trial: dict[str, Any]) -> float:
+    """Calendar days a ledger trial covers.
+
+    Args:
+        trial: A ``ledger.selection_set`` row (``start`` and ``end``).
+
+    Returns:
+        Days, first and last included; NaN when a date is missing (``deflate`` then treats it as the job's span).
+    """
+    if not trial.get("start") or not trial.get("end"):
+        return float("nan")
+    return float((pd.Timestamp(trial["end"]) - pd.Timestamp(trial["start"])).days + 1)
 
 
 def _root(spec: dict[str, Any]) -> str:
@@ -537,7 +556,9 @@ def run(job_id: str, log: Callable[[str], None] = print, proposer: Any = None) -
             _update(job_id, status="refused", message=msg, finished_at=naive_utc())
             log(msg)
             return rep
-        track = _Tracker([t["edge_sharpe"] for t in prior], ev.n_days, ev.dpy, method)
+        span = (pd.Timestamp(ev.research[1]) - pd.Timestamp(ev.research[0])).days + 1
+        track = _Tracker([t["edge_sharpe"] for t in prior], ev.n_days, ev.dpy, method,
+                         [_days(t) / span for t in prior])
         last_save = [time.monotonic()]
         live: dict[str, Any] = {"search": None}
 
@@ -651,6 +672,7 @@ def _finish(rep: dict[str, Any], track: _Tracker, refs: list[Result], ev: Evalua
         ev: The evaluator.
     """
     trial_sr = np.asarray(track.prior + track.edges, dtype=float)
+    length = np.asarray(track.prior_len + [1.0] * len(track.edges), dtype=float)
     ref_daily = [(r.spec["signal"]["rule"], r.daily_edge) for r in refs if r.ok and r.daily_edge is not None]
     kept: list[Result] = []
     for r in track.top:
@@ -660,7 +682,7 @@ def _finish(rep: dict[str, Any], track: _Tracker, refs: list[Result], ev: Evalua
             break
     top = []
     for r in kept:
-        d = pipeline.deflate(r.daily_edge.astype(float), trial_sr, ev.dpy, track.method)
+        d = pipeline.deflate(r.daily_edge.astype(float), trial_sr, ev.dpy, track.method, length)
         corrs = [(name, _corr(r.daily_edge, e)) for name, e in ref_daily]
         corrs = [(n, c) for n, c in corrs if math.isfinite(c)]
         close = max(corrs, key=lambda x: abs(x[1])) if corrs else (None, float("nan"))

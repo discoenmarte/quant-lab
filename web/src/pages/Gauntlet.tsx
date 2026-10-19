@@ -46,7 +46,7 @@ const THRESHOLD_DOCS: Record<string, string> = {
   regime_min_share: 'Regimes: share with positive return',
   max_corr: 'Diversification: correlation to validated portfolio at most',
   grid_max: 'Grid: most settings per run',
-  dsr_variance: 'Significance: spread of trial Sharpes (sample, upper_half, mad, luck_bound)',
+  dsr_variance: 'Significance: spread of trial Sharpes (sample, upper_half, mad, luck_bound, luck_max)',
 };
 
 /**

@@ -66,6 +66,7 @@ SPREAD_NOTE = {
     "upper_half": "the spread above the median, {used:.2f}, is used instead of the plain {plain:.2f}",
     "mad": "the MAD spread, {used:.2f}, is used instead of the plain {plain:.2f}",
     "luck_bound": "the trials' Sharpes spread {plain:.2f}, wider than luck can ({used:.2f}), so {used:.2f} is used",
+    "luck_max": "the trials' Sharpes spread {plain:.2f}, wider than luck can ({used:.2f}), so {used:.2f} is used",
 }
 
 
@@ -236,7 +237,8 @@ def crisis_windows(bench: pd.Series, n: int = 3) -> list[tuple[pd.Timestamp, pd.
     return out
 
 
-def deflate(cand_e: np.ndarray, trial_sr: np.ndarray, dpy: int, method: str) -> dict[str, Any]:
+def deflate(cand_e: np.ndarray, trial_sr: np.ndarray, dpy: int, method: str,
+            length: np.ndarray | None = None) -> dict[str, Any]:
     """Deflated Sharpe of a candidate's daily edge against the trials it was chosen from.
 
     Args:
@@ -244,19 +246,26 @@ def deflate(cand_e: np.ndarray, trial_sr: np.ndarray, dpy: int, method: str) -> 
         trial_sr: Annual edge Sharpes of every trial counted, the candidate included.
         dpy: Days per year (252 or 365).
         method: How the spread of the trial Sharpes is estimated (``stats.VARIANCE_METHODS``).
+        length: Each trial's history length as a multiple of the candidate's, aligned with ``trial_sr``. None
+            means every trial covers the candidate's period. A shorter history spreads its Sharpe wider by luck,
+            so the luck variance is the mean of the candidate's divided by each length.
 
     Returns:
         The output of ``stats.dsr`` plus ``n_trials``, ``var_method``, ``var_annual`` (the V used),
         ``var_sample_annual`` (the plain sample variance) and ``luck_var_annual`` (the sampling variance of one
-        Sharpe estimate with no edge), variances in annual Sharpe units squared.
+        Sharpe estimate with no edge, averaged over the trials), variances in annual Sharpe units squared.
 
     Raises:
         ValueError: Unknown method.
     """
     x = np.asarray(trial_sr, dtype=float)
-    x = x[np.isfinite(x)]
+    keep = np.isfinite(x)
+    x = x[keep]
     skew, kurt, rho = stats.moments(cand_e)
     luck = stats.sr_variance(0.0, int(np.isfinite(cand_e).sum()), skew, kurt, rho)
+    if length is not None and len(x):
+        rel = np.asarray(length, dtype=float)[keep]
+        luck *= float(np.mean(1.0 / np.clip(np.where(np.isfinite(rel), rel, 1.0), 1e-3, None)))
     luck = luck if math.isfinite(luck) else math.inf
     var_daily = stats.trial_variance(x / math.sqrt(dpy), method, luck)
     n_trials = max(len(x), 1)
@@ -316,6 +325,7 @@ def evaluate(
     candidate_counted: bool = False,
     portfolio: pd.Series | None = None,
     seed: int = 7,
+    selection_days: list[float] | None = None,
 ) -> dict[str, Any]:
     """Judge a candidate on the research period. Pure: reads and writes nothing.
 
@@ -332,6 +342,8 @@ def evaluate(
             among ``selection``; otherwise it is added.
         portfolio: Daily returns of the already-validated portfolio, or None when there isn't one.
         seed: Seed for the grid fill, permutations and bootstrap.
+        selection_days: Calendar days each trial in ``selection`` covers, aligned with it. None means every trial
+            covers the candidate's research period.
 
     Returns:
         ``stages`` (list of ``Stage``), ``failed_stage``, ``research`` (first and last date), ``grid``,
@@ -371,6 +383,11 @@ def evaluate(
         m = metrics.summary(pd.Series(R[:, k]), pd.Series(rf_d), dpy, benchmark=pd.Series(bench))
         records.append({"params": cfg, "start": research[0], "end": research[1], "metrics": m})
     trial_sr = np.asarray(list(selection or []) + ([] if candidate_counted else [cand_edge]), dtype=float)
+    trial_len = None
+    if selection_days is not None:
+        span = (pd.Timestamp(research[1]) - pd.Timestamp(research[0])).days + 1
+        trial_len = np.asarray(list(selection_days) + ([] if candidate_counted else [span]), dtype=float) / span
+        trial_len = trial_len[np.isfinite(trial_sr)]
     trial_sr = trial_sr[np.isfinite(trial_sr)]
     lap("metrics")
 
@@ -497,7 +514,7 @@ def evaluate(
 
     # 7. Selection: the luck threshold after every trial on this instrument, overfitting of the parameter
     # choice, and the chance this is a false discovery.
-    d = deflate(cand_e, trial_sr, dpy, str(th.get("dsr_variance", thresholds.LEGACY["dsr_variance"])))
+    d = deflate(cand_e, trial_sr, dpy, str(th.get("dsr_variance", thresholds.LEGACY["dsr_variance"])), trial_len)
     n_trials = d["n_trials"]
     p = pbo(np.nan_to_num(E)) if len(grid) > 1 else {"pbo": float("nan"), "logits": [], "is_sharpe": [],
                                                       "oos_sharpe": [], "n_splits": 0}
@@ -642,6 +659,7 @@ def judge_subject(
     actor: str = "user",
     selection: list[float] | None = None,
     batch: str | None = None,
+    selection_days: list[float] | None = None,
 ) -> dict[str, Any]:
     """Run the gauntlet on a subject, record its grid as trials, and save the report card.
 
@@ -656,6 +674,8 @@ def judge_subject(
         selection: Annual edge Sharpes to deflate against, including the candidate's own, instead of the ledger's
             current set. Used by ``judge_batch``.
         batch: Pre-registered batch id, recorded on the card.
+        selection_days: Calendar days each trial in ``selection`` covers. None means the candidate's research
+            period.
 
     Returns:
         The report card: ``card_id``, ``verdict`` (``candidate`` or ``rejected``), ``failed_stage``, the
@@ -672,12 +692,13 @@ def judge_subject(
         cand_key = (subject.strategy, db.dumps(cand_params), *subject.research)
         counted = any((t["strategy"], t["params"], t["start"], t["end"]) == cand_key for t in prior)
         selection = [t["edge_sharpe"] for t in prior]
+        selection_days = [_span(t) for t in prior]
     else:
         counted = True
 
     started = time.perf_counter()
     out = evaluate(subject, cand_params, th=th, selection=selection, candidate_counted=counted,
-                   portfolio=validated_portfolio(subject.question), seed=seed)
+                   portfolio=validated_portfolio(subject.question), seed=seed, selection_days=selection_days)
     ledger.record_trials([
         {**r, "question": subject.question, "family": subject.family, "strategy": subject.strategy,
          "symbol": subject.scope, "source": "gauntlet", "data_hash": subject.data_hash} for r in out["records"]
@@ -737,18 +758,34 @@ def judge_batch(
     batch = uuid.uuid4().hex[:8]
     plan = [{"question": s.question, "params": _complete(s.strat, p)} for s, p in entries]
     audit.log("gauntlet.preregister", target=batch, actor=actor, reason=note, details={"candidates": plan})
-    prior = {(s.scope, s.interval): [t["edge_sharpe"] for t in ledger.selection_set(s.scope, s.interval)]
-             for s, _ in entries}
+    prior = {(s.scope, s.interval): ledger.selection_set(s.scope, s.interval) for s, _ in entries}
     edges: dict[tuple[str, str], list[float]] = {}
+    days: dict[tuple[str, str], list[float]] = {}
     for (s, _), item in zip(entries, plan, strict=True):
         sim = s.simulate(item["params"])
         e, _ = metrics.edge(sim.net - s.rf, sim.bench - s.rf)
         edges.setdefault((s.scope, s.interval), []).append(_ann(stats.sharpe(e), s.dpy))
+        days.setdefault((s.scope, s.interval), []).append(_span({"start": s.research[0], "end": s.research[1]}))
     cards = []
     for (s, p) in entries:
         key = (s.scope, s.interval)
-        cards.append(judge_subject(s, p, seed, actor, selection=prior[key] + edges[key], batch=batch))
+        cards.append(judge_subject(s, p, seed, actor, selection=[t["edge_sharpe"] for t in prior[key]] + edges[key],
+                                   batch=batch, selection_days=[_span(t) for t in prior[key]] + days[key]))
     return cards
+
+
+def _span(trial: dict[str, Any]) -> float:
+    """Calendar days a trial covers, first and last day included.
+
+    Args:
+        trial: A dict with ``start`` and ``end`` (ISO dates), as ``ledger.selection_set`` returns.
+
+    Returns:
+        Days, or NaN when either date is missing.
+    """
+    if not trial.get("start") or not trial.get("end"):
+        return float("nan")
+    return float((pd.Timestamp(trial["end"]) - pd.Timestamp(trial["start"])).days + 1)
 
 
 def run_gauntlet(

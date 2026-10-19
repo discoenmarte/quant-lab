@@ -258,6 +258,7 @@ def test_trial_variance_ignores_a_trial_that_can_never_be_the_best():
     assert stats.trial_variance(trials, "upper_half") < plain / 10
     assert stats.trial_variance(trials, "mad") < plain / 10
     assert stats.trial_variance(trials, "luck_bound", luck=0.2) == 0.2
+    assert stats.trial_variance(trials, "luck_max", luck=0.2) == pytest.approx(0.2 * 5 / 4)  # rho can reach -1/4
     assert stats.trial_variance(trials[:4], "luck_bound", luck=10.0) == pytest.approx(np.var(trials[:4], ddof=1))
     assert stats.trial_variance([0.3], "upper_half") == 0.0
     with pytest.raises(ValueError, match="unknown variance method"):
@@ -265,7 +266,8 @@ def test_trial_variance_ignores_a_trial_that_can_never_be_the_best():
 
 
 def test_deflate_keeps_the_old_formula_and_lowers_the_bar_without_the_outlier():
-    """``sample`` reproduces the original DSR; the luck bound caps the spread at one Sharpe's sampling error."""
+    """``sample`` reproduces the original DSR; the luck bounds cap the spread near one Sharpe's sampling error,
+    widened for N (any correlation) and for trials with shorter histories."""
     rng = np.random.default_rng(12)
     e = rng.normal(0.0004, 0.01, 2000)
     trials = np.array([0.64, 0.43, -0.87, -4.0])
@@ -277,6 +279,10 @@ def test_deflate_keeps_the_old_formula_and_lowers_the_bar_without_the_outlier():
     assert capped["luck_var_annual"] == pytest.approx(365 * stats.sr_variance(0.0, 2000, *stats.moments(e)))
     assert capped["sr0"] < d["sr0"] / 3 and capped["dsr"] > d["dsr"]
     assert pipeline.deflate(e, trials[:1], 365, "luck_bound")["sr0"] == 0.0
+    widest = pipeline.deflate(e, trials, 365, "luck_max")
+    assert widest["var_annual"] == pytest.approx(capped["luck_var_annual"] * 4 / 3)
+    short = pipeline.deflate(e, trials, 365, "luck_max", np.array([1.0, 1.0, 1.0, 0.5]))  # one trial half as long
+    assert short["luck_var_annual"] == pytest.approx(capped["luck_var_annual"] * 5 / 4)
 
 
 def test_versions_saved_before_the_variance_key_keep_the_sample_variance(monkeypatch):

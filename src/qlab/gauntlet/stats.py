@@ -134,7 +134,7 @@ def expected_max_sharpe(n_trials: int, var_sr: float) -> float:
     return float(math.sqrt(var_sr) * ((1.0 - EULER_GAMMA) * a + EULER_GAMMA * b))
 
 
-VARIANCE_METHODS = ("sample", "upper_half", "mad", "luck_bound")
+VARIANCE_METHODS = ("sample", "upper_half", "mad", "luck_bound", "luck_max")
 # Small-sample factors that make (1.4826 · MAD)² unbiased for a normal variance, by simulation (300,000 samples
 # each); from 10 trials on, n / (n − 0.6) is within 1% of the simulated factor.
 _MAD_FACTOR = {2: 0.909, 3: 1.318, 4: 1.395, 5: 1.103, 6: 1.154, 7: 1.055, 8: 1.086, 9: 1.034}
@@ -153,14 +153,19 @@ def trial_variance(sr: np.ndarray | list[float], method: str = "sample", luck: f
       the median.
     - ``mad``: ``(1.4826 · MAD)²`` with a small-sample factor. Ignores outliers in both tails.
     - ``luck_bound``: the sample variance, but no more than ``luck``, the sampling variance of one Sharpe
-      estimate with no edge. N trials without skill can't spread wider than independent ones do, so any extra
-      spread comes from real differences between the trials, such as their costs.
+      estimate with no edge: the spread of independent trials without skill. Extra spread comes from real
+      differences between the trials, such as their costs.
+    - ``luck_max``: the sample variance, but no more than ``luck · N / (N − 1)``. Trials without skill whose
+      average correlation is ρ̄ spread ``(1 − ρ̄) · luck`` in expectation, and ρ̄ can't fall below −1/(N − 1),
+      so this is the widest spread luck can produce whatever the correlations. Rules that bet against each
+      other (a trend rule and a reversion rule) can spread wider than independent ones.
 
     Args:
         sr: Sharpe ratios of the trials, all in the same units (per period or annual).
         method: One of ``VARIANCE_METHODS``.
-        luck: Sampling variance of a single Sharpe estimate under the null, in the units of ``sr`` squared. Used
-            by ``luck_bound`` only; infinity means no bound.
+        luck: Sampling variance of one Sharpe estimate under the null, in the units of ``sr`` squared (the mean
+            over trials when their lengths differ). Used by ``luck_bound`` and ``luck_max``; infinity means no
+            bound.
 
     Returns:
         The variance; 0 with fewer than two finite Sharpes.
@@ -182,7 +187,11 @@ def trial_variance(sr: np.ndarray | list[float], method: str = "sample", luck: f
         mad = float(np.median(np.abs(x - np.median(x))))
         return float((1.4826 * mad) ** 2 * _MAD_FACTOR.get(n, n / (n - 0.6)))
     v = float(np.var(x, ddof=1))
-    return min(v, luck) if method == "luck_bound" and math.isfinite(luck) else v
+    if method == "luck_bound":
+        return min(v, luck)
+    if method == "luck_max":
+        return min(v, luck * n / (n - 1))
+    return v
 
 
 def dsr(r: np.ndarray | pd.Series, n_trials: int, var_sr: float) -> dict[str, float]:

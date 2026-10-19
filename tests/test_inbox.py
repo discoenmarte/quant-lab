@@ -13,8 +13,10 @@ from qlab import db, ledger
 from qlab.api.main import create_app
 from qlab.data import store
 from qlab.data.bars import normalize_bars
-from qlab.inbox import digest, feed, replicate, spec, triage
+from qlab.inbox import digest, feed, fulltext, replicate, spec, triage
 from qlab.inbox.llm import Answer, ClaudeCLIProvider, LLMError, parse_json
+
+READ = fulltext.read  # the real reader, kept before the fixture below replaces it
 
 FEED = """<?xml version='1.0' encoding='UTF-8'?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
@@ -43,6 +45,23 @@ FEED = """<?xml version='1.0' encoding='UTF-8'?>
 GOOD = {"is_strategy": True, "testable": 1, "specified": 1, "out_of_sample": 0, "costs": 1, "rationale": 1,
         "breadth": 1, "search_disclosed": 0, "asset_class": "etf", "frequency": "monthly",
         "one_line": "Hold ETFs above their 12-month trend.", "why": "Clear rule, costs included."}
+
+
+HTML = """<html><head><script>var x = 1;</script></head><body><nav>Back to arXiv</nav>
+<article class="ltx_document"><h1>Trend Rules on ETFs</h1>
+<p>Abstract. We study a <math alttext="12">12</math>-month trend rule.</p>
+<p>Unrelated history of the exchange and its buildings and staff, which never mentions any performance.</p>
+<p>Over 1995 to 2020 the rule earns a Sharpe ratio of 0.83 after transaction costs of 5 bps.</p>
+<table><tr><th>Rule</th><th>Sharpe</th></tr><tr><td>Trend</td><td>0.83</td></tr></table>
+<section class="ltx_bibliography"><section><p>Moskowitz (2012). Time series momentum, Sharpe 1.2.</p></section>
+<p>More references.</p></section>
+<p>Appendix: the rebalance is monthly.</p></article><footer>Report an issue</footer></body></html>"""
+
+
+@pytest.fixture(autouse=True)
+def _no_full_text(monkeypatch):
+    """No test reaches arXiv: drafts read no full text unless a test provides one."""
+    monkeypatch.setattr(fulltext, "read", lambda arxiv_id, client=None: None)
 
 
 class FakeLLM:
@@ -154,6 +173,60 @@ def test_specs_only_name_templates_targets_and_parameters_the_lab_has():
         spec.validate({**SPEC, "target": "TSLA"})
     with pytest.raises(ValueError, match="needs a static universe"):
         spec.validate({**SPEC, "kind": "portfolio", "template": "trend_filter", "target": "crypto_top30"})
+
+
+def test_the_full_text_keeps_the_article_and_drops_menus_scripts_and_references():
+    """Only the article's text is kept: formulas as LaTeX, tables as rows, no bibliography, no site menus."""
+    text = fulltext.parse_html(HTML)
+    assert text.startswith("Trend Rules on ETFs") and "12 -month" in text.replace("  ", " ")
+    assert "| Sharpe" in text and "Trend | 0.83" in text
+    assert "Moskowitz" not in text and "More references" not in text and "rebalance is monthly" in text
+    assert "Back to arXiv" not in text and "var x" not in text and "Report an issue" not in text
+
+
+def test_the_excerpt_keeps_the_opening_and_the_passages_about_performance():
+    """Past the opening, blocks about results win over blocks that say nothing about them; gaps are marked."""
+    text = fulltext.parse_html(HTML)
+    out = fulltext.excerpt(text, limit=200, opening=60)
+    assert out.startswith("Trend Rules on ETFs") and "Sharpe ratio of 0.83" in out
+    assert "Unrelated history" not in out and "[...]" in out and len(out) < 260
+
+
+def test_the_full_text_is_fetched_once_and_a_paper_without_html_reads_its_abstract(monkeypatch, isolated_lab):
+    """arXiv is asked once per paper; no HTML version means None (cached too); a server error is raised."""
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if "2401.00001" in str(request.url):
+            return httpx.Response(200, text=HTML, headers={"content-type": "text/html"})
+        if "2401.00002" in str(request.url):
+            return httpx.Response(404)
+        return httpx.Response(503)
+
+    lab = isolated_lab
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(fulltext, "parse_html", lambda html: "Trend Rules on ETFs\n" + "Sharpe 0.83. " * 300)
+    assert "Sharpe 0.83" in READ("2401.00001", client=client)
+    assert "Sharpe 0.83" in READ("2401.00001", client=client) and len(calls) == 1
+    assert READ("2401.00002", client=client) is None
+    assert READ("2401.00002", client=client) is None and len(calls) == 2
+    assert fulltext.cache_path("2401.00002").is_relative_to(lab)
+    with pytest.raises(fulltext.FulltextError, match="503"):
+        READ("2401.00003", client=client)
+
+
+def test_a_draft_reads_the_full_text_when_arxiv_has_it(monkeypatch):
+    """The model gets the excerpts between the paper markers, and the spec says what it was drafted from."""
+    feed.store(feed.parse_feed(FEED))
+    monkeypatch.setattr(fulltext, "read", lambda arxiv_id, client=None: fulltext.parse_html(HTML))
+    llm = FakeLLM(SPEC)
+    s = spec.draft("2610.11111", llm=llm)
+    assert s["spec"]["read"] == "full text (excerpts)"
+    assert "Excerpts of the full text" in llm.prompts[0] and "Sharpe ratio of 0.83" in llm.prompts[0]
+    assert llm.prompts[0].index("Sharpe ratio of 0.83") < llm.prompts[0].index("PAPER>>>")
+    monkeypatch.setattr(fulltext, "read", lambda arxiv_id, client=None: None)
+    assert spec.draft("2610.11111", llm=FakeLLM(SPEC))["spec"]["read"] == "abstract (arXiv has no HTML version)"
 
 
 def test_review_needs_a_reason_and_a_template_that_fits():

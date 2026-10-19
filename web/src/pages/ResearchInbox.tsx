@@ -128,6 +128,7 @@ function SpecReview({ item, onChange }: { item: InboxSpec; onChange: () => void 
           <dt>Differences</dt><dd>{s.differences}</dd>
           <dt>Claimed</dt><dd>Sharpe {num(s.claimed_sharpe)} · CAGR {pct(s.claimed_cagr, 1)} · {s.sample_start ?? '?'} → {s.sample_end ?? '?'} · costs {s.costs_included === null ? '?' : s.costs_included ? 'yes' : 'no'}</dd>
           <dt>Rationale</dt><dd>{s.rationale}</dd>
+          <dt>Read from</dt><dd>{s.read ?? 'abstract'}</dd>
         </dl>
         {!!s.notes?.length && <p className="faint small">{s.notes.join(' · ')}</p>}
         <label className="field small">Template, target and parameters (edit before approving)

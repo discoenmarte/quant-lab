@@ -12,6 +12,8 @@ Design (decision 0010):
 - **Local first, budgeted otherwise.** Ollama (``qwen3.6:35b``) costs nothing per call. The Claude CLI uses the
   owner's subscription and is refused once the month's budget (``QLAB_LLM_BUDGET_USD``, default 0) is spent.
 - Deterministic where the provider allows it: temperature 0 and a fixed seed.
+- **Room to read.** Ollama's default context (a few thousand tokens) would cut off the template catalog plus a
+  paper's excerpts without an error, so calls ask for 16,384 tokens (``QLAB_LLM_CTX``).
 """
 
 from __future__ import annotations
@@ -113,7 +115,8 @@ class OllamaProvider:
         Args:
             model: Model name; None uses ``QLAB_LLM_MODEL`` or ``qwen3.6:35b``.
             url: Server URL; None uses ``QLAB_OLLAMA_URL`` or ``http://127.0.0.1:11434``.
-            timeout: Seconds to wait for one answer (a 35B model reading an abstract takes 10-60 s).
+            timeout: Seconds to wait for one answer (a 35B model reading an abstract takes 10-60 s, a paper's
+                excerpts a few minutes).
             client: HTTP client (tests pass a mock).
         """
         self.model = model or config.setting("QLAB_LLM_MODEL") or DEFAULT_MODEL
@@ -133,7 +136,8 @@ class OllamaProvider:
         return any(m.get("name") == self.model for m in tags.get("models", []))
 
     def ask_json(self, system: str, prompt: str, schema: dict[str, Any] | None = None) -> Answer:
-        """Ask the model, forcing JSON (a schema when given), temperature 0 and a fixed seed.
+        """Ask the model, forcing JSON (a schema when given), temperature 0, a fixed seed and a context of
+        ``QLAB_LLM_CTX`` tokens (16,384 by default).
 
         Args:
             system: Instructions.
@@ -147,7 +151,7 @@ class OllamaProvider:
             LLMError: The server failed or the answer isn't a JSON object.
         """
         body = {"model": self.model, "stream": False, "think": False, "format": schema or "json",
-                "options": {"temperature": 0, "seed": 7},
+                "options": {"temperature": 0, "seed": 7, "num_ctx": int(config.setting("QLAB_LLM_CTX") or 16384)},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
         started = time.perf_counter()
         try:

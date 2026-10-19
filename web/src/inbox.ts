@@ -54,6 +54,8 @@ export interface SpecBody {
   rationale: string;
   notes: string[];
   published?: string;
+  /** What the model read: the full text's excerpts, or the abstract alone (and why). */
+  read?: string;
 }
 
 /** One replication or post-publication run. */

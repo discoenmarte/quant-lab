@@ -8,6 +8,9 @@ Design:
   ``/api/paper/run`` and ``/api/paper/score``); otherwise it runs the same functions in this process.
 - **Every step runs even if an earlier one fails.** A failed ingest leaves stale data, which the run refuses on its
   own (see ``book.decide``), and scoring still updates the reports.
+- **Broker paper trading comes after scoring** (M7b, decision 0009): fetch the fills of earlier orders and reconcile,
+  then send each enrolled sleeve's new decision to its paper broker within the limits. With no sleeves it does
+  nothing; a broker that can't be reached is reported without stopping the job.
 - **The daily report comes last** (``qlab.report``, decision 0008). It gets the job's summary, records it in the
   audit log, sends the headline as a digest and raises an alert if any step failed. A step that crashes still gets a
   report. If the report itself fails (a bug, or a server that went away), the failure alert goes straight to the
@@ -85,7 +88,8 @@ def _via_api(api: str, log: Callable[[str], None], poll: float, timeout: float) 
             log(f"ingest still running after {timeout:.0f} s; deciding on the data stored so far")
         run = client.post("/paper/run").json()
         score = client.post("/paper/score").json()
-    return {"ingest": ingest, "run": run, "score": score}
+        broker = {"sync": client.post("/broker/sync").json(), "execute": client.post("/broker/execute").json()}
+    return {"ingest": ingest, "run": run, "score": score, "broker": broker}
 
 
 def _in_process(log: Callable[[str], None]) -> dict[str, Any]:
@@ -95,8 +99,10 @@ def _in_process(log: Callable[[str], None]) -> dict[str, Any]:
         log: Receives progress lines.
 
     Returns:
-        ``ingest`` (per-source results), ``run`` and ``score`` (per-entry results).
+        ``ingest`` (per-source results), ``run`` and ``score`` (per-entry results) and ``broker`` (``sync`` and
+        ``execute``).
     """
+    from ..broker import execution
     from ..data.ingest import SOURCES, ingest
     from . import book, score
 
@@ -108,7 +114,9 @@ def _in_process(log: Callable[[str], None]) -> dict[str, Any]:
                             "errors": res["errors"]})
         except Exception as err:  # one failed source must not stop the decisions
             results.append({"source": name, "status": "error", "n_series": 0, "errors": [str(err)]})
-    return {"ingest": results, "run": book.run(actor="nightly"), "score": score.score(actor="nightly")}
+    run, scored = book.run(actor="nightly"), score.score(actor="nightly")
+    broker = {"sync": execution.sync(), "execute": execution.execute(actor="nightly")}
+    return {"ingest": results, "run": run, "score": scored, "broker": broker}
 
 
 def summary(res: dict[str, Any], started: datetime, finished: datetime) -> dict[str, Any]:
@@ -121,9 +129,13 @@ def summary(res: dict[str, Any], started: datetime, finished: datetime) -> dict[
 
     Returns:
         ``ok, mode, started_at, finished_at, error``, ``ingest`` (per source: status, series and the first errors),
-        ``run`` (counts per decision status and the refusal messages) and ``score`` (counts and entries in alarm).
+        ``run`` (counts per decision status and the refusal messages), ``score`` (counts and entries in alarm) and
+        ``broker`` (sleeves per status, new fills, accounts that don't reconcile, errors).
     """
     run, score = res.get("run", []), res.get("score", [])
+    broker = res.get("broker") or {}
+    executed = broker.get("execute") or []
+    synced = broker.get("sync") or {}
     return {
         "ok": bool(res["ok"]), "mode": res["mode"], "error": res.get("error"),
         "started_at": started.isoformat(timespec="seconds"), "finished_at": finished.isoformat(timespec="seconds"),
@@ -134,6 +146,11 @@ def summary(res: dict[str, Any], started: datetime, finished: datetime) -> dict[
         "score": {"scored": sum(r["status"] == "scored" for r in score),
                   "error": sum(r["status"] == "error" for r in score),
                   "alarms": [r["entry_id"] for r in score if r.get("alarm")]},
+        "broker": {**{k: sum(r["status"] == k for r in executed)
+                      for k in ("sent", "exists", "blocked", "not_configured", "too_late", "error")},
+                   "fills": synced.get("fills", 0),
+                   "mismatches": [k for k, v in (synced.get("reconciliation") or {}).items() if not v.get("ok")],
+                   "errors": [str(e) for e in synced.get("errors", [])][:3]},
     }
 
 
@@ -184,11 +201,14 @@ def nightly(api: str = DEFAULT_API, log: Callable[[str], None] = print, poll: fl
     try:
         out = _via_api(api, log, poll, timeout) if mode == "api" else _in_process(log)
     except Exception as err:  # a crashed step must still end in a report and an alert
-        out, error = {"ingest": [], "run": [], "score": []}, f"{type(err).__name__}: {err}"
+        out, error = {"ingest": [], "run": [], "score": [], "broker": {}}, f"{type(err).__name__}: {err}"
         log(f"the job stopped: {error}")
     bad_ingest = any(r["status"] == "error" for r in out["ingest"])
     bad_book = any(r["status"] in ("refused", "error") for r in out["run"] + out["score"])
-    res = {"mode": mode, **out, "ok": not (bad_ingest or bad_book or error)}
+    broker = out.get("broker") or {}
+    bad_broker = any(r["status"] == "error" for r in broker.get("execute") or []) or any(
+        not v.get("ok") for v in ((broker.get("sync") or {}).get("reconciliation") or {}).values())
+    res = {"mode": mode, **out, "ok": not (bad_ingest or bad_book or bad_broker or error)}
     if error:
         res["error"] = error
     if report:

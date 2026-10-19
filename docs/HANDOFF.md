@@ -4,7 +4,8 @@ How to pick this project up and keep building it. Read this, then `README.md`, `
 `docs/STYLE.md`.
 
 - **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6, the Deflated Sharpe variance fix (thresholds v3), M7b,
-  the regimes stage on the edge (thresholds v4), the near-miss caps and M4 (research inbox)
+  the regimes stage on the edge (thresholds v4), the near-miss caps, M4 (research inbox) and M5 (strategy
+  mining, thresholds v5)
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -42,7 +43,7 @@ src/qlab/config.py        paths (QLAB_DATA overrides the data folder; tests use 
 src/qlab/db.py            DuckDB connection + schema (trials, audit, sources, series, quality_issues,
                           gauntlet_cards, thresholds, lockbox_uses, paper_entries, paper_decisions, paper_scores,
                           registry_events, daily_reports, alerts, papers, paper_triage, strategy_specs,
-                          llm_calls)
+                          llm_calls, mining_specs, mining_jobs, mining_budgets)
 src/qlab/ledger.py        record_trial(s) / count_trials / selection_set / list_trials / questions
 src/qlab/lockbox.py       fixed sealed date, spent questions (from the ledger), clamp_end for Studio runs
 src/qlab/audit.py         log / recent
@@ -65,6 +66,12 @@ src/qlab/gauntlet/        stats (PSR/DSR/FDR/MinTRL), pbo, nulls (permutations, 
 src/qlab/paper/           forward paper book: sessions (bar open/close times), book (add, decide, retire), score
                           (replay through the engines), monitor (bands, CUSUM alarm), nightly (job + daily report,
                           launchd)
+src/qlab/mining/          strategy mining (decision 0011): formula (operators that can't read the future), grammar
+                          (specs, validation of untrusted specs, compilation into strategies, tunable parameters),
+                          evaluate (research data only, a look-ahead check per trial, worker processes), search
+                          (random, Optuna TPE, genetic programming, LLM), llm (proposals with a rationale), jobs
+                          (budgets per question, the race against luck, coverage, originality, gauntlet hand-off),
+                          calibration (the miner researcher, true edges of admitted noise runs)
 src/qlab/inbox/           research inbox (decision 0010): llm (Ollama and Claude CLI providers), feed (arXiv),
                           triage (the rubric), fulltext (arXiv HTML, excerpts), spec (templates, review),
                           replicate (claim, post-publication, gauntlet), digest (one pass, the digest, usage)
@@ -79,22 +86,24 @@ src/qlab/api/routes_broker.py     /api/broker/status, /controls, /limits; POST /
                                   /pause, /flatten/{entry}, /resume, /limits
 src/qlab/api/routes_report.py     POST /api/report, /report/latest, /report/{id}, /reports, /alerts,
                                   /alerts/channels, POST /alerts/test
+src/qlab/api/routes_mining.py     /api/mining/grammar, /jobs, /jobs/{id}, POST /jobs, /jobs/{id}/stop,
+                                  /jobs/{id}/gauntlet, /budgets, POST /budgets, POST /propose, /calibration
 src/qlab/api/routes_inbox.py      /api/inbox/papers, /papers/{id}, /specs, /specs/{id}, /compare, /catalog,
                                   /digest, /usage, /jobs; POST /run, /papers/{id}/spec, /specs/{id}/review,
                                   /specs/{id}/replicate, /specs/{id}/judge, /digest
 src/qlab/cli.py           qlab serve | init | ingest | backtest | portfolio | gauntlet | calibrate | paper | report |
-                          registry | alerts | broker | inbox ...
+                          registry | alerts | broker | inbox | mine | calibrate-mining ...
 tests/                    pytest; conftest gives each test its own QLAB_DATA folder
 web/src/App.tsx           shell: sidebar (nav.ts), top bar, routes, command palette
 web/src/nav.ts            every page, its milestone and whether it's built (flip `ready` when done)
 web/src/pages/            Home, DataHealth, BacktestStudio, PortfolioLab, Gauntlet, Ledger, StrategyBoard,
-                          TradingDesk, ResearchInbox, System, Audit, Glossary, Placeholder
+                          TradingDesk, ResearchInbox, MiningLab, System, Audit, Glossary, Placeholder
 web/src/components/       Card, Stat, Badge, InfoTip, DataTable, EChart, Icon, Clocks, Toast, CommandPalette
 .github/workflows/ci.yml  ruff + pytest, and web type-check + build, on every push
 docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 0003 small stack, 0004 gauntlet,
                           0005 portfolios and forward evidence first, 0006 crypto cross-section, 0007 paper book,
                           0008 registry, daily report and alerts, 0009 broker paper trading, 0010 research
-                          inbox
+                          inbox, 0011 strategy mining
 docs/preregistration/     batches written down and committed before they run
 ops/launchd/              template for the nightly job (rendered by `make paper-launchd`, never installed)
 ```
@@ -115,7 +124,7 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M6 | Registry, daily report, alerts | **Done** (tag `m6`). Lifecycle states derived for every card, a strict near-miss rule, a daily report after every nightly job, four alert rules (file, macOS, Telegram), Strategy Board. |
 | M7b | Broker paper trading | **Done** (tag `m7b`). Paper-only adapters (Alpaca paper, Binance testnet), sleeves, raw-price sizing, opening-auction orders, limits, kill switch in the top bar, reconciliation, slippage vs the model. Alpaca paper account connected; nothing enrolled yet (the owner's call). |
 | M4 | Research inbox | **Done** (tag `m4`). arXiv feed with frontier queries, a seven-point rubric from the local model, specs from the full text onto existing templates, the owner's review, replication with history before each window, post-publication runs, a weekly digest, the cost meter, Research Inbox page. Three papers' TSMOM benchmarks replicated within tolerance (decision 0010). |
-| M5 | Strategy mining | Next (decision 0011). |
+| M5 | Strategy mining | **Done** (tag `m5`). Grammar of signals, filters, exits, sessions and sizing; formulas that can't read the future; random, Bayesian and genetic search on one budgeted loop; an LLM proposer with rationales; every try a ledger trial; Mining Lab; calibrated at mining scale, mined trials count twice in N (thresholds v5, decision 0011). |
 | M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
 
 ## 5. What M1 and M2 delivered (facts worth knowing)
@@ -555,11 +564,68 @@ changed. Two specs wait as `needs_code` (X-Trend, NoLBERT topics).
 **Next:** schedule the weekly run (the owner's call); a manual form for SSRN or journal papers; read arXiv's LaTeX
 source for papers without HTML; flag post-publication windows too short to judge.
 
-### M5: strategy mining
+### M5: strategy mining (done; decision 0011)
 
-Grammar of signals × filters × exits × sizing; random/Bayesian search (add `optuna`), genetic programming for
-formulas; budgets per research question; every candidate is a ledger trial. Exit: noise calibration still
-holds at mining scale.
+**What a candidate is.** A spec (JSON): a signal (one of the lab's rules with parameters, or a formula of
+Kakushadze-style operators on raw prices, volume, returns, the overnight gap, dollar volume, the market return and the
+calendar), a filter (trend side, or calm volatility), an exit (time, or a trailing fall; one instrument), a session (all
+day, overnight only, day only; equities only), sizing (a volatility target, never above full size), and a direction
+(one instrument) or a hold (a universe: top share of members, days between rebalances). `grammar.validate_spec` checks
+untrusted specs and `grammar.compile_spec` is the only way one runs. Up to four of a spec's numbers become its tunable
+parameters; the structure hashes to `mined_<hash>`.
+
+**How it searches.** `qlab mine run <scope> --paradigm random|tpe|gp|llm --trials N --minutes M`, or the Mining Lab:
+
+- Every evaluated spec is a ledger trial on `mined:<scope>:1d`, source `mining`, on research data only (the miner
+  never reads a bar from the lockbox date on). One lockbox per mining question.
+- Budgets: 2,000 trials per mining question unless the owner raises it with a reason (`qlab mine budget`).
+- A job first evaluates the lab's known rules at their published defaults (the baseline and the reference for
+  originality), then searches; the report holds the best-so-far curve against the luck threshold at each N, the top ten
+  candidates (de-duplicated by daily-edge correlation above 0.9) with their DSR at the job's N, turnover, complexity and
+  correlation with the closest known rule, coverage maps and the edge histogram.
+- `qlab mine gauntlet <job> [strategy]` (or the page) judges a candidate like any card; N counts every trial on the
+  scope. `qlab mine propose <scope>` asks the local model for ideas with rationales; it runs nothing.
+
+**Calibration at mining scale** (`qlab calibrate-mining`, decision 0011): a miner researcher searches synthetic noise
+and planted markets with each paradigm for 1,000 trials (500 on crypto) and submits its best to the unchanged gauntlet.
+
+- **Study M1** (`60973742`, seeds 400,001+): noise passed 1.8% pooled but 10% for TPE and 7.5% for GP on eight-asset
+  panels (every other family 0%). The seven winners' true edges on 150-year noise panels were +0.02 to +0.10 against
+  +1.14 to +1.28 in their studies: selection luck of adaptive search. Counting each mined trial twice brought every
+  family to 5% or less.
+- **Study M2** (`c0ed8dbd`, seeds 500,001+): every family at or below 5% with each trial counted twice (worst 2.5%),
+  and as run; the two noise winners' true edges were +0.11 and +0.06. Pooled, Bayesian search on panels passed noise
+  6.25% as run and 3.75% with N×2.
+- **Thresholds v5** = v4 with `mining_n_factor: 2`: each mined trial counts twice in the Deflated Sharpe's N, for every
+  candidate on its scope. Created on the real lab on 2026-10-19 (audit `gauntlet.thresholds`, actor `claude`); fresh
+  labs default to it, older versions count each trial once, no card was re-judged.
+- **Power** (M1, as adopted with N×2): a planted trend of edge 1.0 is found 100% of the time on one instrument and
+  93-100% on panels; edge 0.5 15-45% on one instrument (random 15%, GP 40%, TPE 45%) and 87-100% on panels; crypto
+  momentum 0.98 80-100%, 0.49 20-47%.
+
+**What the miner found on real data so far:**
+
+- `all_etfs` (job `28873afb23`, GP, 500 trials, run at the owner's request under thresholds v4): with 1,909 trials on the
+  universe luck reached an edge Sharpe of 0.67; the best was the lab's cross-sectional momentum rule (378-day lookback,
+  six ETFs, monthly) traded only above the 150-day average, edge +0.69, DSR 0.55, correlation 0.65 with the published
+  rule. Nothing cleared the bar; nothing went to the gauntlet.
+- SPY: two development jobs ran in a scratch lab (500 trials; best edge 0.64, an RSI(2) dip rule held only overnight,
+  rejected at significance with DSR 0.78). Their 1,100 trials (mining and two gauntlet grids) were recorded in the real
+  ledger, so `mined:SPY:1d` has 500 of its 2,000 used.
+
+**Follow-ups worth doing:**
+
+1. Mining `crypto_top30` (breadth gives power there); the nightly task alternates it with `all_etfs`. Each job spends
+   budget and raises N on its universe for every later candidate.
+2. A walk-forward that re-runs the search before each year (the gauntlet's walk-forward re-chooses parameters of a
+   structure chosen on all research data).
+3. A null for session rules (overnight and daytime moves dealt out separately), before trusting an overnight edge.
+4. Close orders in the paper book and the brokers, so session rules can be paper-traded.
+5. New terminals from new data (funding rates, on-chain flows): the model keeps proposing them.
+6. Nightly mining exists as a scheduled task (`quantlab-mining-nightly`, about 21:30 Bogotá, set up by another
+   session at the owner's request): one 250-trial job a night on whichever of `all_etfs` or `crypto_top30` has used
+   fewer mined trials, only while `mining_n_factor` is at least 2; it sends a best to the gauntlet only past the
+   job's DSR 0.95 bar and never raises budgets or touches the paper book.
 
 ## 7. Known gotchas
 
@@ -596,6 +662,21 @@ holds at mining scale.
     and calibration study E took 105 minutes for 800 runs.
   - **Rules by kind:** cross-sectional rules (`kind="dynamic"`) are refused on static ETF universes and static
     rules on the crypto universes (`runner.check_fit`).
+
+- Mining:
+  - **Mining taxes its scope.** Every mined trial counts in the Deflated Sharpe of everything later tested on that
+    instrument or universe, twice from thresholds v5. Budgets (default 2,000 per mining question) cap it; raise one
+    with `qlab mine budget mined:<scope>:1d --trials N --reason ...`.
+  - **One job at a time** runs on the API server's background runner; `qlab mine run` sends jobs there when
+    `qlab serve` is up and runs them in the foreground otherwise. Worker processes never open the database.
+  - **Speed:** about 10 ms a trial on one instrument, 20-40 ms on an ETF panel, 100 ms on `crypto_top30` (more with
+    TPE, whose own overhead grows with the trials: about 60 ms a trial at 1,000). A mining calibration study takes
+    about 50 minutes on 14 processes and records about 770,000 calibration trials (about 70 MB).
+  - **The preview tool** couldn't start `uv run qlab serve` on 2026-10-19 (the helper sat idle, most likely
+    waiting on a macOS folder-access prompt). Serving the scratch lab from a shell with the broker keys blanked and
+    attaching the pane by URL (`lab-mining-attach` in `.claude/launch.json`) worked.
+  - **Session rules** (overnight or day only) can be judged but not paper-traded: the book and the brokers trade at
+    the open only and refuse them.
 
 - Daily report and alerts:
   - **One window:** each report covers the time since the previous one, so building one from the web or the CLI

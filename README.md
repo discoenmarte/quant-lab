@@ -12,7 +12,9 @@ about half the time, and lets noise through 1.4% of the time ([decision 0004](do
 On synthetic crypto cross-sections of 5.6 years it lets noise through 0.16% of the time and catches a momentum edge
 of 1.0 85% of the time ([decision 0006](docs/decisions/0006-crypto-cross-section.md)). From thresholds v4 every stage
 judges the edge over the passive alternative, the regimes stage included. The one exception is the costs stage, which
-also requires a positive net CAGR, because a strategy should make money after costs.
+also requires a positive net CAGR, because a strategy should make money after costs. At mining scale (random,
+Bayesian and genetic searches of 500-1,000 trials) noise passes at most 5% of the time in every family once each mined
+trial counts twice in N ([decision 0011](docs/decisions/0011-strategy-mining.md)).
 
 > Research and paper trading only. Nothing in this repository places real-money orders.
 
@@ -33,6 +35,11 @@ Broker paper trading: put paper keys in `.env` (`ALPACA_KEY`, `ALPACA_SECRET`; B
 `QLAB_BINANCE_TESTNET_KEY`, `QLAB_BINANCE_TESTNET_SECRET`), enroll a paper-book entry on the Trading Desk (or
 `uv run qlab broker enroll <entry> --reason ... --confirm <entry>`), and the nightly job sends its decisions to
 the paper account. The KILL button in the top bar stops everything at once.
+
+Strategy mining: start a budgeted search on the Mining Lab page (or `uv run qlab mine run crypto_top30 --paradigm gp
+--trials 500`). Every candidate is a ledger trial, the page shows the best find racing the luck threshold, and the
+best goes to the gauntlet like any other idea. `uv run qlab mine propose <scope>` asks the local model for ideas with
+a rationale, checked against the grammar; nothing it writes is executed.
 
 Research inbox: start Ollama (`ollama serve`) and run `uv run qlab inbox run` (or the Run button on the Research
 Inbox page). It reads new arXiv q-fin papers plus keyword searches, scores each abstract on a seven-point rubric
@@ -92,7 +99,7 @@ flowchart LR
 | Paper book | `qlab.paper` | Each day's targets are recorded before the next bar exists and scored with the backtest engines against bands frozen when a card joins. |
 | Registry, report, alerts | `qlab.registry`, `qlab.report`, `qlab.alerts` | A card's lifecycle state is derived from its verdict, the paper book and retirements, never stored. The daily report reads what the lab recorded and runs no backtest. Alerts fire on changes between two reports. |
 | Inbox | `qlab.inbox` | arXiv papers scored on a seven-point rubric and mapped onto the lab's existing templates by a local model (paper text is untrusted data, and nothing the model writes is run). The owner reviews; replication and post-publication runs are ledger trials. |
-| Mining | `qlab.mining` | Budgeted search over a strategy grammar. Every candidate is a ledger trial, and the significance bar rises with N. |
+| Mining | `qlab.mining` | Budgeted search over a grammar of signals, filters, exits, sessions and sizing, compiled only by the lab (formulas can't read the future). Every candidate is a ledger trial on `mined:<scope>:1d`, mined trials count twice in the Deflated Sharpe's N, and the best goes to the unchanged gauntlet. |
 | API | `qlab.api` | Thin HTTP layer, no business logic. The web app, the CLI and (later) a Telegram bot all use it. |
 | Web | `web/` | Static React app that reads the API only. Every page belongs to a milestone. |
 
@@ -130,7 +137,7 @@ flowchart LR
 | M3b | Portfolio lab | Multi-asset panels, weights engine, six diversified strategies, portfolio gauntlet and calibration, pre-registered batches | done |
 | M3c | Breadth | Survivorship-free crypto cross-section (588 Binance USDT pairs, delisted ones included), point-in-time universes, drifting positions, four published crypto factor rules, a cross-sectional null, calibration study E and pre-registered verdicts ([decision 0006](docs/decisions/0006-crypto-cross-section.md)) | done |
 | M4 | Research inbox | arXiv feed with frontier queries, a seven-point rubric from a local model, specs drafted from the full text onto existing templates, the owner's review, replication against the claim and after publication, a weekly digest; three papers' TSMOM benchmarks replicated within tolerance ([decision 0010](docs/decisions/0010-research-inbox.md)) | done |
-| M5 | Strategy mining | Grammar search, genetic programming, rising significance bar | planned |
+| M5 | Strategy mining | A grammar of signals, filters, exits, sessions and sizing with a formula language; random, Bayesian (Optuna) and genetic-programming search on one budgeted loop; a local-LLM proposer that must give a rationale; budgets per question; the race against the luck threshold; calibrated at mining scale ([decision 0011](docs/decisions/0011-strategy-mining.md)) | done |
 | M6 | Registry and alerts | Lifecycle states for every card and a strict near-miss rule (only the luck stages failed, p ≤ 0.10, PSR ≥ 0.80), a daily lab report from the ledger, cards, paper book, audit log and data freshness, four alert rules through a file, macOS and Telegram, the report at the end of the nightly job, Strategy Board ([decision 0008](docs/decisions/0008-registry-report-alerts.md)) | done |
 | M7a | Forward paper book | Daily targets recorded before the next bar exists, scored with the backtest engines against frozen research bands, a CUSUM decay alarm, a nightly job, Trading Desk ([decision 0007](docs/decisions/0007-forward-paper-book.md)) | done |
 | M7b | Broker paper trading | Paper-only Alpaca and Binance testnet adapters, sleeves sized from raw prices, opening-auction orders, limits outside the strategy, a kill switch on every page, reconciliation and slippage against the model ([decision 0009](docs/decisions/0009-broker-paper-trading.md)) | done |

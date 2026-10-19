@@ -323,3 +323,56 @@ def test_variance_study_compares_every_method_on_the_same_runs(fast_thresholds):
     assert ledger.count_trials() == rep["settings"]["n_trials"] > len(runs)
     what_if = calibration.rejudge(rep["id"], {"dsr_variance": "luck_bound"})
     assert what_if["noise"] == rep["by_method"]["luck_bound"]["noise"]
+
+
+def test_regimes_judge_the_net_return_or_the_edge_as_the_thresholds_say():
+    """Versions saved before ``regime_basis`` judge the net return in each regime; a version can choose the edge."""
+    _, th = thresholds.current()
+    v = {"leak": 1.0, "edge": 0.4, "net_cagr": 0.05, "wf_oos": 0.3, "wf_ratio": 0.6, "plateau": 0.8,
+         "perm_p": 0.004, "dsr": 0.97, "pbo": 0.1, "regime_share": 0.25, "regime_edge_share": 0.75,
+         "div_corr": float("nan"), "div_gain": float("nan")}
+    assert pipeline.judge(v, {**th, "regime_basis": "net"})["regimes"] is False
+    assert pipeline.judge(v, {**th, "regime_basis": "edge"})["regimes"] is True
+    assert pipeline.regime_basis({k: x for k, x in th.items() if k != "regime_basis"}) == "net"
+    with pytest.raises(ValueError, match="regime_basis must be one of"):
+        thresholds.update({"regime_basis": "raw"}, "typo")
+    assert thresholds.current()[1]["regime_basis"] == thresholds.DEFAULT["regime_basis"]
+    thresholds.update({"regime_basis": "net"}, "test")
+    assert thresholds.current()[1]["regime_basis"] == "net"
+
+
+def test_regimes_stage_measures_the_edge_and_the_net_return_in_each_regime(fast_thresholds):
+    """The card shows both per regime, judges the one its thresholds choose, and says which."""
+    store.write_series("yahoo", "SPY", "1d", bars_from(np.random.default_rng(8).normal(0.0003, 0.01, 4000)))
+    for basis in ("net", "edge"):
+        thresholds.update({"regime_basis": basis}, "test")
+        card = pipeline.run_gauntlet("yahoo", "SPY", "1d", "trend_sma")
+        stage = next(s for s in card["stages"] if s["key"] == "regimes")
+        rows = stage["chart"]["rows"]
+        assert rows and all({"strategy", "edge", "benchmark"} <= set(r) for r in rows)
+        judged = "edge" if basis == "edge" else "strategy"
+        assert stage["value"] == pytest.approx(sum(r[judged] > 0 for r in rows) / len(rows))
+        assert stage["chart"]["basis"] == basis and stage["threshold"].startswith(
+            "edge positive" if basis == "edge" else "net return positive")
+
+
+def test_calibration_compares_both_regime_bases_on_the_same_runs(fast_thresholds):
+    """A calibration report summarises the runs with regimes judging the edge and the net return; re-judging old
+    runs on the edge is refused, since they never measured it."""
+    rep = calibration.run_calibration(noise_reps=1, power_reps=0, noise_years=6, workers=2, log=lambda _: None,
+                                      portfolio_reps=0)
+    assert set(rep["by_regime_basis"]) == set(thresholds.REGIME_BASES)
+    assert rep["noise"] == rep["by_regime_basis"][pipeline.regime_basis(rep["thresholds"])]["noise"]
+    assert calibration.rejudge(rep["id"], {"regime_basis": "edge"})["noise"] == rep["by_regime_basis"]["edge"]["noise"]
+    client = TestClient(create_app())
+    path = calibration.config.reports_dir() / "calibration" / f"{rep['id']}.json"
+    old = calibration.load_report(rep["id"])
+    for r in old["runs"]:
+        r["values"].pop("regime_edge_share")
+    path.write_text(calibration.json.dumps(old))
+    with pytest.raises(ValueError, match="didn't measure the edge by regime"):
+        calibration.rejudge(rep["id"], {"regime_basis": "edge"})
+    assert client.post(f"/api/gauntlet/calibrations/{rep['id']}/rejudge",
+                       json={"changes": {"regime_basis": "edge"}}).status_code == 400
+    assert client.post(f"/api/gauntlet/calibrations/{rep['id']}/rejudge",
+                       json={"changes": {"regime_basis": "net"}}).status_code == 200

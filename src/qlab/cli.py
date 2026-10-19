@@ -602,5 +602,166 @@ def alerts_test() -> None:
         typer.echo(f"  {name:<9} {result}")
 
 
+broker_app = typer.Typer(help="Broker paper trading (Alpaca paper, Binance testnet): sleeves, orders, kill switch",
+                         no_args_is_help=True)
+app.add_typer(broker_app, name="broker")
+
+
+@broker_app.command("status")
+def broker_status() -> None:
+    """Show the controls, each paper account, each sleeve and the latest orders. Never sends an order."""
+    from .broker import execution
+
+    st = execution.status()
+    c = st["controls"]
+    typer.echo(f"trading: {c['mode'].upper()}" + (f" since {c['since']} ({c['reason']})" if c["since"] else ""))
+    for p in c["pending"]:
+        typer.echo(f"  pending: {p['action']} {p['scope']} takes effect {p['effective_at']} ({p['reason']})")
+    for name, b in st["brokers"].items():
+        if not b["configured"]:
+            typer.echo(f"{name}: not configured")
+            continue
+        if "error" in b:
+            typer.echo(f"{name}: {b['error']}")
+            continue
+        a, rec = b["account"], b["reconciliation"]
+        typer.echo(f"{name}: equity {a['equity']:,.2f} {a['currency']}, cash {a['cash']:,.2f}, "
+                   f"{len(b['holdings'])} holdings" + (f", reconciliation {'ok' if rec['ok'] else 'MISMATCH'}"
+                                                      if rec else ""))
+    for sl in st["sleeves"]:
+        held = ", ".join(f"{s} {q:g}" for s, q in sl["holdings"].items()) or "cash only"
+        typer.echo(f"  sleeve {sl['entry_id']} ({sl['broker']}, {sl['status']}, {sl['state']}): equity "
+                   f"{sl['equity']:,.2f} ({sl['return']:+.2%}); {held}")
+    for o in st["orders"][:10]:
+        typer.echo(f"  {o['planned_at']}  {o['client_id']:<34} {o['side']:<4} {o['qty']:g} {o['symbol']:<9} "
+                   f"{o['tif']:<4} {o['status']}" + (f"  {o['message'][:80]}" if o["message"] else ""))
+
+
+@broker_app.command("enroll")
+def broker_enroll(entry_id: str, reason: str = typer.Option(..., help="Why this entry starts paper trading"),
+                  confirm: str = typer.Option(..., help="Type the entry id again")) -> None:
+    """Give a paper-book entry a sleeve on its broker, so its decisions become paper orders.
+
+    Args:
+        entry_id: Paper-book entry.
+        reason: Why.
+        confirm: The entry id again.
+    """
+    from .broker import execution
+
+    sl = execution.enroll(entry_id, reason, confirm, actor="cli")
+    typer.echo(f"{entry_id}: sleeve of {sl['capital']:,.0f} on {sl['broker']}")
+
+
+@broker_app.command("execute")
+def broker_execute() -> None:
+    """Send each enrolled entry's latest decision as paper orders, within the limits. Safe to repeat."""
+    from .broker import execution
+
+    for r in execution.execute(actor="cli"):
+        typer.echo(f"  [{r['status']:<14}] {r['entry_id']} {r.get('question', '')}  decision {r['as_of']}")
+        for o in r["orders"]:
+            typer.echo(f"      {o['side']:<4} {o['qty']:g} {o['symbol']:<9} {o['tif']:<4} {o['status']}"
+                       + (f"  {o['message'][:80]}" if o["message"] else ""))
+        for n in r["notes"]:
+            typer.echo(f"      note: {n}")
+
+
+@broker_app.command("sync")
+def broker_sync() -> None:
+    """Fetch the state of open orders, store new fills and reconcile each account."""
+    from .broker import execution
+
+    out = execution.sync()
+    typer.echo(f"{out['updated']} orders updated, {out['fills']} new fills")
+    for name, r in out["reconciliation"].items():
+        typer.echo(f"  {name}: {'reconciled' if r['ok'] else 'MISMATCH ' + json.dumps(r['mismatches'])}")
+    for e in out["errors"]:
+        typer.echo(f"  error: {e}")
+
+
+@broker_app.command("kill")
+def broker_kill(reason: str = typer.Option("kill switch", help="Why")) -> None:
+    """Stop all paper trading now: no new orders, open orders cancelled, every sleeve sold.
+
+    Args:
+        reason: Why.
+    """
+    from .broker import execution
+
+    out = execution.kill(reason, actor="cli")
+    typer.echo(f"KILLED. {len(out['cancelled'])} open orders cancelled; "
+               f"{sum(len(v) for v in out['flatten'].values())} sell orders sent. Resume: qlab broker resume")
+
+
+@broker_app.command("pause")
+def broker_pause(scope: str = typer.Argument("all", help="all, or an entry id"),
+                 reason: str = typer.Option(..., help="Why")) -> None:
+    """Stop new orders (all, or one entry) and keep positions. Takes effect at once.
+
+    Args:
+        scope: ``all`` or an entry id.
+        reason: Why.
+    """
+    from .broker import controls
+
+    controls.pause(scope, reason, actor="cli")
+    typer.echo(f"paused {scope}")
+
+
+@broker_app.command("flatten")
+def broker_flatten(entry_id: str, reason: str = typer.Option(..., help="Why")) -> None:
+    """Pause one sleeve and sell what it holds.
+
+    Args:
+        entry_id: Entry with a sleeve.
+        reason: Why.
+    """
+    from .broker import execution
+
+    out = execution.flatten(entry_id, reason, actor="cli")
+    typer.echo(f"{entry_id}: paused; {len(out['orders'])} sell orders sent")
+
+
+@broker_app.command("resume")
+def broker_resume(scope: str = typer.Argument("all", help="all, or an entry id"),
+                  reason: str = typer.Option(..., help="Why it is safe to trade again"),
+                  confirm: str = typer.Option(..., help="Type RESUME")) -> None:
+    """Ask to lift a kill or a pause. It takes effect 24 hours from now.
+
+    Args:
+        scope: ``all`` or an entry id.
+        reason: Why.
+        confirm: The word RESUME.
+    """
+    from .broker import controls
+
+    row = controls.resume(scope, reason, confirm, actor="cli")
+    typer.echo(f"resume of {scope} recorded; it takes effect at {row['effective_at']} UTC")
+
+
+@broker_app.command("limits")
+def broker_limits(
+    set_: list[str] = typer.Option([], "--set", help="name=value; tightening is instant, loosening waits 24 h"),
+    reason: str = typer.Option("", help="Why (required to change)"),
+    confirm: str = typer.Option("", help="Type LOOSEN to loosen a limit"),
+) -> None:
+    """Show the limits, or change them.
+
+    Args:
+        set_: Changes as ``name=value``.
+        reason: Why.
+        confirm: ``LOOSEN`` when any change loosens.
+    """
+    from .broker import controls
+
+    if set_:
+        out = controls.set_limits(_parse_params(",".join(set_)), reason, actor="cli", confirm=confirm)
+        typer.echo(f"limits recorded, in effect from {out['effective_at']}"
+                   + (f" (loosened: {', '.join(out['loosened'])})" if out["loosened"] else ""))
+    for k, v in controls.limits().items():
+        typer.echo(f"  {k:<20} {v:g}")
+
+
 if __name__ == "__main__":
     app()

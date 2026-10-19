@@ -307,6 +307,12 @@ def test_budgets_cap_each_question_and_need_a_reason(spy):
     assert jobs.budget_of("mined:SPY:1d")["remaining"] == 0
 
 
+def test_a_job_runs_on_worker_processes_without_opening_the_database(spy, monkeypatch):
+    """With several workers, specs are scored in other processes, which never read the lab database."""
+    rep = jobs.run(jobs.create(spy, "random", 24, 5, workers=2)["job_id"], log=lambda m: None)
+    assert rep["status"] == "done" and rep["progress"]["n_trials"] == 24
+
+
 def test_session_rules_stay_out_of_the_paper_book(spy):
     """A mined rule held only overnight can be judged, but the book refuses it: it would need orders at the close."""
     thresholds.update(FAST, "fast tests")

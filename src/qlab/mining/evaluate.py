@@ -161,13 +161,16 @@ class Evaluator:
         self.n_days = len(days)
 
     @classmethod
-    def for_scope(cls, scope: Scope, banned: tuple[str, ...] = (), leak_cuts: int = 2) -> Evaluator:
+    def for_scope(cls, scope: Scope, banned: tuple[str, ...] = (), leak_cuts: int = 2,
+                  end: str | None = None) -> Evaluator:
         """Load a real scope's research data (never anything from the lockbox date on).
 
         Args:
             scope: What to search.
             banned: Parts of the grammar to leave out.
             leak_cuts: Future perturbations per trial.
+            end: Last research date; None reads it from the thresholds in force. Worker processes get it passed
+                in, so they never open the database while the server holds it.
 
         Returns:
             The evaluator.
@@ -177,7 +180,7 @@ class Evaluator:
             KeyError: Unknown universe or cost preset.
             ValueError: Fewer than three years of research data, or a scope kind other than bars or panel.
         """
-        end = lockbox.research_end()
+        end = end or lockbox.research_end()
         if scope.kind == "bars":
             bars = runner.load_bars(scope.source, scope.name, scope.interval, end=end)
             info = SOURCES.get(scope.source)
@@ -187,7 +190,7 @@ class Evaluator:
             ev = cls(space, bars=bars, model=runner.resolve_costs(scope.costs, scope.source),
                      rf=runner.risk_free(scope.source, bars, scope.interval), scope=scope, leak_cuts=leak_cuts)
         elif scope.kind == "panel":
-            panel = research_panel(load_panel(scope.name))
+            panel = research_panel(load_panel(scope.name), end)
             ev = cls(grammar.panel_space(panel, banned), panel=panel, scope=scope, leak_cuts=leak_cuts)
         else:
             raise ValueError(f"unknown scope kind {scope.kind!r}")
@@ -267,7 +270,7 @@ class Evaluator:
                           error=str(err)[:200], seconds=time.perf_counter() - t0)
 
 
-def research_panel(panel: Panel) -> Panel:
+def research_panel(panel: Panel, end: str | None = None) -> Panel:
     """A panel cut to the research period, without instruments that are never members before the lockbox.
 
     Membership is point in time, so cutting after loading changes no member. Dropping instruments that only
@@ -275,11 +278,12 @@ def research_panel(panel: Panel) -> Panel:
 
     Args:
         panel: The full panel.
+        end: Last research date; None reads it from the thresholds in force.
 
     Returns:
         The research panel.
     """
-    cut = clip_to(panel, None, lockbox.research_end())
+    cut = clip_to(panel, None, end or lockbox.research_end())
     keep = np.flatnonzero(cut.member.any(axis=0))
     if len(keep) == cut.n:
         return cut
@@ -295,18 +299,19 @@ _WORKER: Evaluator | None = None
 
 
 def _init_worker(scope: dict[str, Any] | None, banned: tuple[str, ...], leak_cuts: int,
-                 synthetic: dict[str, Any] | None) -> None:
-    """Load the scope once in a worker process.
+                 synthetic: dict[str, Any] | None, end: str | None = None) -> None:
+    """Load the scope once in a worker process, without opening the database.
 
     Args:
         scope: ``Scope.to_dict()``, or None for a synthetic market.
         banned: Parts of the grammar to leave out.
         leak_cuts: Future perturbations per trial.
         synthetic: Arguments of ``Evaluator.synthetic`` (bars or panel), when ``scope`` is None.
+        end: Last research date of a real scope.
     """
     global _WORKER
     if scope is not None:
-        _WORKER = Evaluator.for_scope(Scope(**scope), banned, leak_cuts)
+        _WORKER = Evaluator.for_scope(Scope(**scope), banned, leak_cuts, end)
     else:
         _WORKER = Evaluator.synthetic(**synthetic, leak_cuts=leak_cuts, banned=banned)
 
@@ -347,7 +352,8 @@ class Pool:
                 synthetic = {"bars": ev.bars} if ev.kind == "bars" else {"panel": ev.panel}
             self._pool = ProcessPoolExecutor(
                 self.workers, initializer=_init_worker,
-                initargs=(ev.scope.to_dict() if ev.scope else None, ev.space.banned, ev.leak_cuts, synthetic))
+                initargs=(ev.scope.to_dict() if ev.scope else None, ev.space.banned, ev.leak_cuts, synthetic,
+                          ev.research[1] if ev.scope else None))
 
     def evaluate(self, specs: list[dict[str, Any]], seed: int = 7) -> list[Result]:
         """Score specs, in order.

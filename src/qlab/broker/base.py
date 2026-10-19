@@ -159,7 +159,7 @@ class PaperClient:
 
         Args:
             base_url: Scheme and host of the broker's paper API.
-            client: An existing client (tests pass one with a mock transport); None opens one.
+            client: An existing client (tests pass one with a mock transport); None opens one on first use.
             timeout: Seconds per request.
 
         Raises:
@@ -167,7 +167,7 @@ class PaperClient:
         """
         _check_host(base_url)
         self.base_url = base_url.rstrip("/")
-        self._client = client or httpx.Client(timeout=timeout)
+        self._client, self._timeout = client, timeout  # opened on first use: an unconfigured broker opens nothing
 
     def request(self, method: str, path: str, *, params: dict[str, Any] | None = None,
                 json: dict[str, Any] | None = None, headers: dict[str, str] | None = None,
@@ -191,6 +191,8 @@ class PaperClient:
         """
         url = self.base_url + path
         _check_host(url)
+        if self._client is None:
+            self._client = httpx.Client(timeout=self._timeout)
         try:
             return self._client.request(method, url, params=params, json=json, headers=headers, content=content)
         except httpx.HTTPError as err:  # the request object can carry headers; report the type only

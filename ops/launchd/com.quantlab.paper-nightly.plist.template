@@ -4,8 +4,11 @@
   placeholders for this checkout, writes the result under data/ops/, and prints the install steps.
 
   What it runs: `qlab paper nightly` (ingest the free sources, record each entry's targets for the latest close,
-  score the book). It talks to a running `qlab serve` through the API when one is up, so the two never fight over
-  the database. Paper only: nothing in the job can place an order.
+  score the book, then build the daily report and send its alerts). It talks to a running `qlab serve` through the
+  API when one is up, so the two never fight over the database. Paper only: nothing in the job can place an order.
+
+  Alert secrets (QLAB_TELEGRAM_TOKEN, QLAB_TELEGRAM_CHAT) don't belong here: put them in data/lab.env, which git
+  ignores and the job reads.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

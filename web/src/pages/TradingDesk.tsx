@@ -12,6 +12,7 @@ import {
 } from '../api';
 import { AXIS, GRID_LINE } from '../charts';
 import { Badge, type BadgeTone } from '../components/Badge';
+import { BrokerPanel } from '../components/BrokerPanel';
 import { Card } from '../components/Card';
 import { DataTable } from '../components/DataTable';
 import { EChart } from '../components/EChart';
@@ -350,7 +351,7 @@ export function TradingDesk() {
         <h1>Trading Desk</h1>
         <span className="muted">
           The forward paper book: each day's targets are recorded before the next bar exists, then scored as bars arrive.
-          Paper only; nothing here can place an order.
+          Enrolled entries also trade those targets on paper broker accounts. Paper only: no real money anywhere.
         </span>
       </div>
       <div className="stats-row">
@@ -393,6 +394,8 @@ export function TradingDesk() {
       </Card>
 
       {selected && detail.data && <EntryDetail detail={detail.data} onRetire={retire} />}
+
+      <BrokerPanel entries={entries} />
 
       <div className="grid cols-2">
         <Card title="Add a report card">

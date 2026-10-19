@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactElement } from 'react';
 import { NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import { post, type DemoResult } from './api';
 import { Clocks } from './components/Clocks';
+import { KillSwitch } from './components/KillSwitch';
 import { CommandPalette, type Command } from './components/CommandPalette';
 import { Icon } from './components/Icon';
 import { ToastProvider, useToast } from './components/Toast';
@@ -37,7 +38,8 @@ const PAGES: Record<string, ReactElement> = {
 };
 
 /**
- * Top bar: research-mode banner, clocks, API status and the command palette button.
+ * Top bar: research-mode banner, clocks, the paper-trading mode with the kill switch, API status and the command
+ * palette button.
  *
  * @param props.onPalette - Opens the command palette.
  */
@@ -51,6 +53,7 @@ function TopBar({ onPalette }: { onPalette: () => void }) {
       </div>
       <Clocks />
       <div className="topbar-right">
+        <KillSwitch />
         <span
           className={`api-dot ${error ? 'bad' : data?.ok ? 'ok' : ''}`}
           title={error ? `API unreachable: ${error}` : 'API connected'}

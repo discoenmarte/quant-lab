@@ -617,7 +617,6 @@ def run_calibration(
         question = f"calib:{run_id}:{r['scenario']}:{family}:{i}"
         trials.extend({**rec, "question": question, "family": family, "strategy": family, "symbol": "SYNTH",
                        "source": "calibration"} for rec in r.pop("records"))
-    ledger.record_trials(trials)
 
     report = {
         "id": run_id,
@@ -642,7 +641,9 @@ def run_calibration(
     report["headline"] = headline(report)
     path = config.reports_dir() / "calibration" / f"{run_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(clean(report)))
+    path.write_text(json.dumps(clean(report)))  # saved first: the runs survive a ledger write that fails
+    for k in range(0, len(trials), 100_000):
+        ledger.record_trials(trials[k:k + 100_000])
     audit.log("gauntlet.calibrate", target=run_id, actor=actor,
               details={"fpr": report["fpr_overall"], "runs": len(runs), "trials": len(trials)})
     return clean(report)

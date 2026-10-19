@@ -244,3 +244,71 @@ def test_gauntlet_and_ledger_api(fast_thresholds):
     assert client.get("/api/gauntlet/lockbox").json()["sealed_from"] == lockbox.DEFAULT_FROM
     refused = client.post(f"/api/gauntlet/cards/{card_id}/lockbox", json={"confirm": "x", "reason": "y"})
     assert refused.status_code == 400
+
+
+def test_trial_variance_ignores_a_trial_that_can_never_be_the_best():
+    """Every method estimates a normal spread; only the sample variance balloons when one trial pays huge costs."""
+    rng = np.random.default_rng(11)
+    big = rng.normal(0, 1, 20_000)
+    for method in stats.VARIANCE_METHODS:
+        assert stats.trial_variance(big, method) == pytest.approx(1.0, rel=0.05)
+    trials = np.array([0.6, 0.4, 0.1, -0.2, -4.0])  # the last one trades daily and loses its costs
+    plain = stats.trial_variance(trials)
+    assert plain == pytest.approx(np.var(trials, ddof=1))
+    assert stats.trial_variance(trials, "upper_half") < plain / 10
+    assert stats.trial_variance(trials, "mad") < plain / 10
+    assert stats.trial_variance(trials, "luck_bound", luck=0.2) == 0.2
+    assert stats.trial_variance(trials[:4], "luck_bound", luck=10.0) == pytest.approx(np.var(trials[:4], ddof=1))
+    assert stats.trial_variance([0.3], "upper_half") == 0.0
+    with pytest.raises(ValueError, match="unknown variance method"):
+        stats.trial_variance(trials, "trimmed")
+
+
+def test_deflate_keeps_the_old_formula_and_lowers_the_bar_without_the_outlier():
+    """``sample`` reproduces the original DSR; the luck bound caps the spread at one Sharpe's sampling error."""
+    rng = np.random.default_rng(12)
+    e = rng.normal(0.0004, 0.01, 2000)
+    trials = np.array([0.64, 0.43, -0.87, -4.0])
+    old = stats.dsr(e, 4, float(np.var(trials, ddof=1)) / 365)
+    d = pipeline.deflate(e, trials, 365, "sample")
+    assert d["dsr"] == pytest.approx(old["dsr"]) and d["sr0"] == pytest.approx(old["sr0"])
+    capped = pipeline.deflate(e, trials, 365, "luck_bound")
+    assert capped["var_annual"] == pytest.approx(capped["luck_var_annual"])
+    assert capped["luck_var_annual"] == pytest.approx(365 * stats.sr_variance(0.0, 2000, *stats.moments(e)))
+    assert capped["sr0"] < d["sr0"] / 3 and capped["dsr"] > d["dsr"]
+    assert pipeline.deflate(e, trials[:1], 365, "luck_bound")["sr0"] == 0.0
+
+
+def test_versions_saved_before_the_variance_key_keep_the_sample_variance(monkeypatch):
+    """A key added later never changes an earlier version; new versions can choose any offered method."""
+    from qlab import db
+
+    with db.connect() as con:
+        con.execute("INSERT INTO thresholds (version, created_at, reason, config) VALUES (1, now(), 'old', ?)",
+                    [db.dumps({k: v for k, v in thresholds.DEFAULT.items() if k != "dsr_variance"})])
+    monkeypatch.setitem(thresholds.DEFAULT, "dsr_variance", "luck_bound")
+    assert thresholds.current()[1]["dsr_variance"] == "sample"
+    with pytest.raises(ValueError, match="dsr_variance must be one of"):
+        thresholds.update({"dsr_variance": "positive_gross"}, "study-only rule")
+    assert thresholds.update({"dsr_variance": "upper_half"}, "test") == 2
+    assert thresholds.current()[1]["dsr_variance"] == "upper_half"
+
+
+def test_variance_study_compares_every_method_on_the_same_runs(fast_thresholds):
+    """Grids and pre-registered batches record a DSR per method; summaries and re-judging can swap them in."""
+    reps = {k: 0 for k in calibration.STUDY_REPS} | {"single_tuned": 1, "single_batch": 1, "single_power": 1}
+    rep = calibration.run_variance_study(reps, workers=2, log=lambda _: None)
+    runs = calibration.load_report(rep["id"])["runs"]
+    n_families = len(calibration.NOISE_FAMILIES)
+    assert len(runs) == 2 * n_families + 4  # tuned and batch noise, then tuned and batch power at two edges
+    assert {r["scenario"] for r in runs} == {"noise_tuned", "noise_batch", "power_tuned", "power_batch"}
+    for r in runs:
+        assert set(r["dsr_by"]) == set(calibration.STUDY_METHODS)
+        assert r["dsr_by"]["sample"] == pytest.approx(r["values"]["dsr"])
+    batch = [r for r in runs if r["scenario"] == "noise_batch"]
+    assert len({r["seed"] for r in batch}) == 1 and len({r["family"] for r in batch}) == n_families
+    assert set(rep["by_method"]) == set(calibration.STUDY_METHODS)
+    assert {p["scenario"] for p in rep["power"]} == {"power_tuned", "power_batch"}
+    assert ledger.count_trials() == rep["settings"]["n_trials"] > len(runs)
+    what_if = calibration.rejudge(rep["id"], {"dsr_variance": "luck_bound"})
+    assert what_if["noise"] == rep["by_method"]["luck_bound"]["noise"]

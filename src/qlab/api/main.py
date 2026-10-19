@@ -8,10 +8,21 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__, config
-from . import routes_backtest, routes_core, routes_data, routes_gauntlet, routes_ledger, routes_paper, routes_portfolio
+from . import (
+    routes_backtest,
+    routes_core,
+    routes_data,
+    routes_gauntlet,
+    routes_ledger,
+    routes_paper,
+    routes_portfolio,
+    routes_registry,
+    routes_report,
+)
 
 ROUTERS = [routes_core.router, routes_data.router, routes_backtest.router, routes_gauntlet.router,
-           routes_ledger.router, routes_portfolio.router, routes_paper.router]
+           routes_ledger.router, routes_portfolio.router, routes_paper.router, routes_registry.router,
+           routes_report.router]
 
 
 def create_app() -> FastAPI:

@@ -686,6 +686,20 @@ def broker_execute() -> None:
             typer.echo(f"      note: {n}")
 
 
+@broker_app.command("catchup")
+def broker_catchup() -> None:
+    """After the open: sync, then send once what each sleeve's latest rebalance left unfilled, as day orders."""
+    from .broker import execution
+
+    for r in execution.catch_up(actor="cli"):
+        typer.echo(f"  [{r['status']:<14}] {r['entry_id']}  decision {r['as_of']}")
+        for o in r["orders"]:
+            typer.echo(f"      {o['side']:<4} {o['qty']:g} {o['symbol']:<9} {o['tif']:<4} {o['status']}"
+                       + (f"  {o['message'][:80]}" if o["message"] else ""))
+        for n in r["notes"]:
+            typer.echo(f"      note: {n}")
+
+
 @broker_app.command("sync")
 def broker_sync() -> None:
     """Fetch the state of open orders, store new fills and reconcile each account."""

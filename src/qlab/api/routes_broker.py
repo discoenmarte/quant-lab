@@ -137,6 +137,16 @@ def execute() -> list[dict[str, Any]]:
     return _guard(execution.execute, actor="web")
 
 
+@router.post("/catchup")
+def catchup() -> list[dict[str, Any]]:
+    """After the open: send once what each sleeve's latest rebalance left unfilled. Safe to repeat.
+
+    Returns:
+        One result per sleeve.
+    """
+    return _guard(execution.catch_up, actor="web")
+
+
 @router.post("/sync")
 def sync() -> dict[str, Any]:
     """Fetch open orders' states, store fills, reconcile.

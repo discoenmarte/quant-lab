@@ -16,6 +16,11 @@ Design (decision 0009):
   orders per day, no leverage inside a sleeve, and all sleeves together below a share of the account. A blocked
   order is stored with the reason and raises an alert. Reducing risk (selling what a sleeve holds, on a kill or a
   flatten) bypasses every limit except "only what the sleeve holds".
+- **Catching up what the auction left.** Alpaca's paper engine fills part of an order about one time in ten on
+  purpose, and an ``opg`` order's remainder expires once the auction is over: on 2026-10-21 ten of fifteen opening
+  orders ended unfilled or part-filled, leaving the sleeve 13% invested against a 71% target. ``catch_up``, run
+  after the open, sends each remainder once as a day order (purpose ``catchup``, flagged late), within the same
+  limits. Its fills count in slippage against the open, so the cost of missing the auction is measured, not hidden.
 - **Idempotent.** One rebalance per entry and decision: the client order id is built from the entry, the decision
   date and the symbol, and brokers refuse a duplicate id. Fills are append-only, keyed by the broker's id.
 - **Reconciliation.** Before its first order on a broker, the lab stores the account's holdings as a baseline. After
@@ -542,6 +547,33 @@ def _orders_today(now: datetime) -> int:
                          [start]) or 0)
 
 
+def _limit_breach(o: dict[str, Any], lim: dict[str, float], now: datetime, lab_value: float,
+                  account_equity: float, tradable: bool) -> str:
+    """The first limit an order would break, in plain words.
+
+    Args:
+        o: Planned order (``side``, ``notional``).
+        lim: Limits in force.
+        now: Time (tz-aware).
+        lab_value: What every sleeve on the broker holds before this order.
+        account_equity: The account's equity (plus the lab's holdings on Binance, where equity is cash only).
+        tradable: Whether the broker allows trading on the account.
+
+    Returns:
+        The reason, or an empty string when the order is within every limit.
+    """
+    if o["notional"] > lim["max_order_notional"]:
+        return f"order of {o['notional']:,.0f} is above the {lim['max_order_notional']:,.0f} limit"
+    if _orders_today(now) >= lim["max_orders_per_day"]:
+        return f"already {lim['max_orders_per_day']:.0f} orders today"
+    if o["side"] == "buy" and lab_value + o["notional"] > lim["max_account_share"] * account_equity:
+        return (f"all sleeves would hold {lab_value + o['notional']:,.0f}, above "
+                f"{lim['max_account_share']:.0%} of the account ({account_equity:,.0f})")
+    if not tradable:
+        return "the broker has blocked trading on this account"
+    return ""
+
+
 def execute(now: datetime | None = None, brokers: dict[str, Broker] | None = None,
             actor: str = "user") -> list[dict[str, Any]]:
     """Send each enrolled entry's latest decision to its broker, within every limit.
@@ -634,16 +666,7 @@ def _execute_one(sl: dict[str, Any], item: dict[str, Any], broker: Broker | None
         row = {"client_id": client_id("q", sl["entry_id"], day.strftime("%y%m%d"), o["symbol"]),
                "entry_id": sl["entry_id"], "purpose": "rebalance", "as_of": day.date(), "symbol": o["symbol"],
                "side": o["side"], "qty": o["qty"], "tif": tif, "ref_price": o["ref_price"], "late": late}
-        why = ""
-        if o["notional"] > lim["max_order_notional"]:
-            why = f"order of {o['notional']:,.0f} is above the {lim['max_order_notional']:,.0f} limit"
-        elif _orders_today(now) >= lim["max_orders_per_day"]:
-            why = f"already {lim['max_orders_per_day']:.0f} orders today"
-        elif o["side"] == "buy" and lab_value + o["notional"] > lim["max_account_share"] * account_equity:
-            why = (f"all sleeves would hold {lab_value + o['notional']:,.0f}, above "
-                   f"{lim['max_account_share']:.0%} of the account ({account_equity:,.0f})")
-        elif not account.tradable:
-            why = "the broker has blocked trading on this account"
+        why = _limit_breach(o, lim, now, lab_value, account_equity, account.tradable)
         if why:
             sent.append(_block(row, broker.name, why, now))
             blocked += 1
@@ -662,6 +685,134 @@ def _execute_one(sl: dict[str, Any], item: dict[str, Any], broker: Broker | None
     if not orders:
         notes.append("already at target; nothing to trade")
     return {"status": status, "as_of": as_of, "equity": equity, "late": late, "tif": tif, "notes": notes,
+            "orders": [{k: r[k] for k in ("client_id", "symbol", "side", "qty", "tif", "status", "message")}
+                       for r in sent]}
+
+
+def catch_up(now: datetime | None = None, brokers: dict[str, Broker] | None = None,
+             actor: str = "user") -> list[dict[str, Any]]:
+    """After the open, send once what each sleeve's latest rebalance left unfilled, as day orders.
+
+    Runs ``sync`` first, so expired auction orders are known. For each active sleeve whose latest decision's
+    rebalance orders are all final, every order that ended ``expired`` or ``canceled`` with units left gets one
+    ``catchup`` order for the rest (never more than the sleeve holds for a sell; buys cut to the sleeve's cash),
+    within every limit. Nothing is sent before the open the decision was meant for, or in the last 15 minutes of
+    its session.
+
+    Args:
+        now: Time (tz-aware); None means now.
+        brokers: Broker objects by name; None builds them from the settings.
+        actor: Who ran it, for the audit log.
+
+    Returns:
+        One result per active sleeve: ``entry_id, status`` (``sent``, ``nothing``, ``waiting``, ``blocked``,
+        ``not_configured``, ``too_late`` or ``error``), ``as_of``, ``orders`` and ``notes``.
+    """
+    now = now or now_utc()
+    brokers = brokers if brokers is not None else make_brokers()
+    sync(now, brokers)
+    lim = controls.limits(now)
+    results = []
+    for sl in sleeves("active"):
+        out: dict[str, Any] = {"entry_id": sl["entry_id"], "status": "", "as_of": None, "orders": [], "notes": []}
+        try:
+            out.update(_catch_up_one(sl, brokers.get(sl["broker"]), lim, now))
+        except (BrokerError, KeyError, ValueError, FileNotFoundError) as err:
+            out.update(status="error", notes=[str(err)])
+            _alert("broker_error", "warn", f"catchup:{sl['entry_id']}:{naive_utc(now).date()}",
+                   f"Catch-up failed for {sl['entry_id']}", str(err))
+        results.append(out)
+    audit.log("broker.catchup", target="sleeves", actor=actor,
+              details={s: sum(r["status"] == s for r in results) for s in ("sent", "nothing", "blocked", "error")})
+    return results
+
+
+def _catch_up_one(sl: dict[str, Any], broker: Broker | None, lim: dict[str, float],
+                  now: datetime) -> dict[str, Any]:
+    """Send one sleeve's unfilled remainders of its latest rebalance.
+
+    Args:
+        sl: Sleeve row.
+        broker: Its broker, or None.
+        lim: Limits in force.
+        now: Time (tz-aware).
+
+    Returns:
+        ``status``, ``as_of``, ``orders`` and ``notes`` (see ``catch_up``).
+    """
+    ok, why = controls.allowed(sl["entry_id"], now)
+    if not ok:
+        return {"status": "blocked", "notes": [why]}
+    if broker is None or not broker.configured():
+        return {"status": "not_configured", "notes": [f"set the {sl['broker']} paper keys to trade this sleeve"]}
+    decs = book.decisions(sl["entry_id"])
+    if not decs:
+        return {"status": "nothing", "notes": ["no decision yet"]}
+    d = decs[-1]
+    as_of = str(d["as_of"])[:10]
+    rows = db.rows("SELECT * FROM broker_orders WHERE entry_id = ? AND as_of = ? ORDER BY planned_at",
+                   [sl["entry_id"], as_of])
+    rebal = [r for r in rows if r["purpose"] == "rebalance"]
+    if not rebal:
+        return {"status": "nothing", "as_of": as_of, "notes": [f"the decision of {as_of} hasn't been sent"]}
+    if any(r["status"] in OPEN_STATUSES for r in rows):
+        return {"status": "waiting", "as_of": as_of, "notes": ["orders of this decision are still open"]}
+    item = book.entry(sl["entry_id"])
+    asset_class, _ = _instruments(item)
+    next_open = _when(d["next_open"])
+    close = sessions.first_close(pd.Timestamp(next_open.date(), tz="UTC"), [asset_class])
+    if now < next_open:
+        return {"status": "waiting", "as_of": as_of, "notes": ["the open this decision is for hasn't come yet"]}
+    if now >= close - timedelta(minutes=15):
+        return {"status": "too_late", "as_of": as_of, "notes": ["its session is about to close or has closed"]}
+    done = {r["symbol"] for r in rows if r["purpose"] == "catchup"}
+    held, cash = sleeve_book(sl, broker.quote)
+    stamp = pd.Timestamp(as_of).strftime("%y%m%d")
+    plan = []
+    for r in rebal:
+        left = broker.round_qty(r["symbol"], float(r["qty"]) - float(r["filled_qty"] or 0.0))
+        if r["status"] not in ("expired", "canceled") or left <= 0 or r["symbol"] in done:
+            continue
+        if r["side"] == "sell":
+            left = min(left, held.get(r["symbol"], 0.0))
+        notional = left * float(r["ref_price"] or 0.0)
+        if left > 0 and notional >= max(lim["min_order_notional"], broker.min_notional(r["symbol"])):
+            plan.append({"symbol": r["symbol"], "side": r["side"], "qty": left, "ref_price": r["ref_price"],
+                         "notional": notional})
+    notes: list[str] = []
+    sells = [o for o in plan if o["side"] == "sell"]
+    buys = [o for o in plan if o["side"] == "buy"]
+    budget = cash + sum(o["notional"] for o in sells)
+    spend = sum(o["notional"] for o in buys)
+    if buys and spend > budget + 1e-6:
+        k = max(budget, 0.0) / spend
+        notes.append(f"buys cut to {k:.0%} to stay within the sleeve's cash")
+        buys = [{**o, "qty": q, "notional": q * o["ref_price"]} for o in buys
+                if (q := broker.round_qty(o["symbol"], o["qty"] * k)) > 0]
+    if not sells + buys:
+        return {"status": "nothing", "as_of": as_of, "notes": ["every order of this decision filled"]}
+    account = broker.account()
+    lab_value = _lab_value(broker, broker.quote)
+    account_equity = account.equity + (lab_value if broker.name == "binance" else 0.0)
+    tif = "day" if broker.name == "alpaca" else "gtc"
+    sent, blocked = [], 0
+    for o in sells + buys:
+        row = {"client_id": client_id("c", sl["entry_id"], stamp, o["symbol"]), "entry_id": sl["entry_id"],
+               "purpose": "catchup", "as_of": pd.Timestamp(as_of).date(), "symbol": o["symbol"], "side": o["side"],
+               "qty": o["qty"], "tif": tif, "ref_price": o["ref_price"], "late": True}
+        why = _limit_breach(o, lim, now, lab_value, account_equity, account.tradable)
+        if why:
+            sent.append(_block(row, broker.name, why, now))
+            blocked += 1
+            continue
+        res = _send(broker, row, now)
+        if res["status"] == "rejected":
+            _alert("broker_rejected", "warn", res["client_id"], f"Catch-up rejected: {o['side']} {o['symbol']}",
+                   f"{sl['entry_id']}: {res['message']}")
+        if o["side"] == "buy" and res["status"] != "rejected":
+            lab_value += o["notional"]
+        sent.append(res)
+    return {"status": "blocked" if blocked == len(sent) else "sent", "as_of": as_of, "notes": notes,
             "orders": [{k: r[k] for k in ("client_id", "symbol", "side", "qty", "tif", "status", "message")}
                        for r in sent]}
 
@@ -898,17 +1049,17 @@ def flatten(entry_id: str, reason: str, actor: str = "user", now: datetime | Non
 
 
 def slippage(entry_id: str | None = None) -> list[dict[str, Any]]:
-    """Each filled rebalance against the raw open the engine would have filled at.
+    """Each filled rebalance or catch-up against the raw open the engine would have filled at.
 
     Args:
         entry_id: Only this sleeve; None for all.
 
     Returns:
-        One row per order with a stored model open: ``client_id, entry_id, symbol, side, qty, tif, late,
+        One row per order with a stored model open: ``client_id, entry_id, purpose, symbol, side, qty, tif, late,
         fill_price, model_price, slippage_bps`` (positive means the fill was worse than the model) and ``model_bps``
         (the half-spread plus slippage the cost model charges for that asset class).
     """
-    clauses, args = ["o.purpose = 'rebalance'", "o.filled_qty > 0"], []
+    clauses, args = ["o.purpose IN ('rebalance', 'catchup')", "o.filled_qty > 0"], []
     if entry_id:
         clauses.append("o.entry_id = ?")
         args.append(entry_id)
@@ -929,7 +1080,8 @@ def slippage(entry_id: str | None = None) -> list[dict[str, Any]]:
         model = bar[0]
         sign = 1.0 if r["side"] == "buy" else -1.0
         preset = COST_PRESETS["crypto_xs" if r["broker"] == "binance" else "etf"]
-        out.append({"client_id": r["client_id"], "entry_id": r["entry_id"], "symbol": r["symbol"], "side": r["side"],
+        out.append({"client_id": r["client_id"], "entry_id": r["entry_id"], "purpose": r["purpose"],
+                    "symbol": r["symbol"], "side": r["side"],
                     "qty": r["filled_qty"], "tif": r["tif"], "late": r["late"], "fill_price": r["avg_price"],
                     "model_price": model, "slippage_bps": sign * (r["avg_price"] / model - 1.0) * 1e4,
                     "model_bps": preset.spread_bps / 2 + preset.slippage_bps})
@@ -996,5 +1148,5 @@ def status(now: datetime | None = None, brokers: dict[str, Broker] | None = None
     }
 
 
-__all__ = ["enroll", "execute", "flatten", "kill", "plan_orders", "reconcile", "sleeves", "slippage",
+__all__ = ["catch_up", "enroll", "execute", "flatten", "kill", "plan_orders", "reconcile", "sleeves", "slippage",
            "status", "sync", "time_in_force"]

@@ -281,6 +281,35 @@ def test_a_decision_becomes_orders_fills_a_clean_reconciliation_and_slippage(ent
     assert not execution.reconcile(b, now + timedelta(hours=13))["ok"]
 
 
+def test_catch_up_sends_what_the_auction_left_once(entry):
+    """Part-filled and unfilled auction orders get one day order each for the rest, after the open only."""
+    item, day = entry
+    execution.enroll(item["entry_id"], "start", item["entry_id"])
+    b = FakeBroker()
+    now = night(day)
+    res = execution.execute(now, {"alpaca": b})[0]
+    assert len(res["orders"]) == 2
+    first, second = res["orders"]
+    # The auction fills part of the first order and none of the second; both remainders expire.
+    b.orders[first["client_id"]].update(status="expired", qty=first["qty"] - 3, avg=100.0)
+    b.orders[second["client_id"]].update(status="expired", qty=0.0, avg=None)
+    nxt = book.decisions(item["entry_id"])[-1]["next_open"]
+    opened = execution._when(nxt)
+    early = execution.catch_up(opened - timedelta(minutes=5), {"alpaca": b})[0]
+    assert early["status"] == "waiting" and not any(c.startswith("c-") for c in b.orders)
+    out = execution.catch_up(opened + timedelta(minutes=15), {"alpaca": b})[0]
+    assert out["status"] == "sent" and {o["symbol"]: o["qty"] for o in out["orders"]} == {
+        first["symbol"]: 3.0, second["symbol"]: second["qty"]}
+    assert all(o["tif"] == "day" and o["client_id"].startswith("c-") for o in out["orders"])
+    again = execution.catch_up(opened + timedelta(minutes=20), {"alpaca": b})[0]
+    assert again["status"] == "waiting"  # its own orders are open; nothing is sent twice
+    b.fill_all(lambda s: 100.0)
+    done = execution.catch_up(opened + timedelta(minutes=30), {"alpaca": b})[0]
+    assert done["status"] == "nothing" and sum(c.startswith("c-") for c in b.orders) == 2
+    late = execution.catch_up(opened + timedelta(hours=6, minutes=20), {"alpaca": b})[0]
+    assert late["status"] in ("nothing", "too_late")
+
+
 def test_limits_block_orders_and_say_why(entry):
     """An order above the size limit is stored as blocked with the reason, and nothing reaches the broker."""
     item, day = entry

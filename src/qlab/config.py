@@ -110,6 +110,32 @@ def setting(name: str, default: str | None = None) -> str | None:
     return default
 
 
+def save_setting(name: str, value: str) -> Path:
+    """Write ``NAME=value`` into ``lab.env``, replacing an earlier line for the same name.
+
+    The file is created readable by its owner only, since it holds secrets.
+
+    Args:
+        name: Variable name.
+        value: Value (no newlines).
+
+    Returns:
+        The file written.
+
+    Raises:
+        ValueError: The name or value holds a newline or the name holds ``=``.
+    """
+    if "\n" in name or "\n" in value or "=" in name or not name.strip():
+        raise ValueError("a setting is one NAME=value line")
+    path = env_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text().splitlines() if path.exists() else []
+    kept = [ln for ln in lines if ln.strip().removeprefix("export ").partition("=")[0].strip() != name]
+    path.write_text("\n".join([*kept, f"{name}={value}"]) + "\n")
+    path.chmod(0o600)
+    return path
+
+
 def ensure_dirs() -> None:
     """Create the data, raw, curated and reports folders if they're missing."""
     for d in (data_dir(), raw_dir(), curated_dir(), reports_dir()):

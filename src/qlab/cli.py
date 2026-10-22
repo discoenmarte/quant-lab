@@ -621,6 +621,45 @@ def alerts_test() -> None:
         typer.echo(f"  {name:<9} {result}")
 
 
+bot_app = typer.Typer(help="Telegram bot: read the lab and reduce risk from a phone; a watchdog for quiet nights",
+                      no_args_is_help=True)
+app.add_typer(bot_app, name="bot")
+
+
+@bot_app.command("run")
+def bot_run(api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API the bot reads")) -> None:
+    """Answer the owner's Telegram messages and watch the lab, until stopped (a service on the server).
+
+    Args:
+        api: Lab API address.
+    """
+    from . import bot
+
+    bot.run(api, log=lambda m: typer.echo(m, err=True))
+
+
+@bot_app.command("chats")
+def bot_chats(save: bool = typer.Option(False, help="Write the only private chat's id into lab.env")) -> None:
+    """List the chats that wrote to the bot, to find QLAB_TELEGRAM_CHAT; optionally save it.
+
+    Args:
+        save: Save the chat id when exactly one private chat wrote.
+    """
+    from . import bot, config
+
+    token = config.setting("QLAB_TELEGRAM_TOKEN")
+    if not token:
+        raise typer.BadParameter(f"put QLAB_TELEGRAM_TOKEN=<token from @BotFather> in {config.env_file()} first")
+    tg = bot.Telegram(token, "")
+    typer.echo(bot.describe_chats(tg))
+    if save:
+        private = [c for c in tg.chats() if c["type"] == "private"]
+        if len(private) != 1:
+            raise typer.BadParameter(f"{len(private)} private chats wrote to the bot; set QLAB_TELEGRAM_CHAT by hand")
+        path = config.save_setting("QLAB_TELEGRAM_CHAT", private[0]["id"])
+        typer.echo(f"saved QLAB_TELEGRAM_CHAT in {path}; run `qlab alerts test` to check")
+
+
 broker_app = typer.Typer(help="Broker paper trading (Alpaca paper, Binance testnet): sleeves, orders, kill switch",
                          no_args_is_help=True)
 app.add_typer(broker_app, name="broker")

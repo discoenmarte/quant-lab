@@ -118,6 +118,18 @@ def sources() -> list[dict[str, Any]]:
     return ingest.list_sources()
 
 
+@router.get("/freshness")
+def freshness_check() -> list[dict[str, Any]]:
+    """How far each source's stored bars are behind the latest finished session.
+
+    Returns:
+        One row per source and interval (see ``data.freshness.check``).
+    """
+    from ..data import freshness
+
+    return freshness.check()
+
+
 @router.get("/series")
 def series() -> list[dict[str, Any]]:
     """Every stored series with its quality-issue counts.

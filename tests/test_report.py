@@ -434,7 +434,7 @@ def test_nightly_crash_still_reports_and_alerts(monkeypatch):
 
     monkeypatch.setattr(nightly, "api_up", lambda api: False)
 
-    def crash(log):
+    def crash(log, *args):
         raise ConnectionError("network down")
 
     monkeypatch.setattr(nightly, "_in_process", crash)

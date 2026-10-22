@@ -332,6 +332,24 @@ def test_nightly_uses_the_running_api(pair, monkeypatch):
     assert res["run"][0]["entry_id"] == pair["entry_id"] and res["score"][0]["status"] == "scored"
 
 
+def test_nightly_waits_for_a_late_us_close():
+    """Yahoo is re-ingested until the latest session is stored, and the wait gives up on time."""
+    from qlab.paper import nightly
+
+    behind = {"source": "yahoo", "interval": "1d", "behind": 1.0, "message": "yahoo 1d: SPY is 1 session behind."}
+    states = [[behind], [behind], [{**behind, "behind": 0.0}]]
+    calls, slept = [], []
+    res = nightly.wait_for_equities(lambda: states.pop(0), lambda: calls.append(1), wait=3600, retry=1200,
+                                    log=lambda msg: None, sleep=slept.append)
+    assert res == {"fresh": True, "tries": 2, "waited": 2400, "message": ""} and len(calls) == 2
+    res = nightly.wait_for_equities(lambda: [behind], lambda: None, wait=2400, retry=1200, log=lambda msg: None,
+                                    sleep=lambda s: None)
+    assert res["fresh"] is False and res["tries"] == 2 and "behind" in res["message"]
+    once = nightly.wait_for_equities(lambda: [behind], lambda: None, wait=0, retry=1200, log=lambda msg: None,
+                                     sleep=lambda s: None)
+    assert once["tries"] == 0 and once["fresh"] is False
+
+
 def test_launchd_job_is_rendered_not_installed(tmp_path):
     """The plist is written for this checkout at a time after the New York close; the steps install nothing."""
     import plistlib

@@ -437,6 +437,8 @@ def paper_retire(entry_id: str, reason: str = typer.Option(..., help="Why the en
 def paper_nightly(
     api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API to use when it is up"),
     report: bool = typer.Option(True, help="Build the daily report and raise its alerts at the end"),
+    wait_minutes: float = typer.Option(0, help="Most minutes to wait for a late US close before deciding"),
+    retry_minutes: float = typer.Option(20, help="Minutes between Yahoo re-ingests while waiting"),
 ) -> None:
     """Ingest the free sources, decide every active entry, score the book and build the daily report. Exits 1 if a
     step failed.
@@ -446,14 +448,20 @@ def paper_nightly(
     Args:
         api: Base URL of the Lab API.
         report: Build the daily report and its alerts.
+        wait_minutes: Most minutes to wait for Yahoo to publish the latest finished session.
+        retry_minutes: Minutes between tries while waiting.
     """
     from .paper.nightly import nightly
     from .timeutil import now_utc
 
     typer.echo(f"== {now_utc().isoformat(timespec='seconds')}")
-    res = nightly(api, log=typer.echo, report=report)
+    res = nightly(api, log=typer.echo, report=report, wait=wait_minutes * 60, retry=retry_minutes * 60)
     for r in res["ingest"]:
         typer.echo(f"  ingest {r['source']:<8} {r['status']} ({r['n_series']} series)")
+    waited = res.get("wait") or {}
+    if waited.get("tries"):
+        typer.echo(f"  wait   {waited['tries']} Yahoo re-ingests over {waited['waited'] / 60:.0f} minutes; "
+                   + ("up to date" if waited["fresh"] else f"still behind: {waited['message']}"))
     for r in res["run"]:
         typer.echo(f"  run    [{r['status']:<8}] {r['question']:<34} {r['message']}")
     for r in res["score"]:

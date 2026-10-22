@@ -6,6 +6,10 @@ Design:
 - **One job, two ways to reach the database.** DuckDB allows one writing process, and a running ``qlab serve`` holds
   it. When the Lab API answers, the job asks the server to do each step (``POST /api/data/ingest``, then
   ``/api/paper/run`` and ``/api/paper/score``); otherwise it runs the same functions in this process.
+- **Waiting for a late close.** Yahoo has published a session's bar hours late (decision 0012). With ``wait`` set,
+  the job re-ingests Yahoo every ``retry`` seconds until the latest finished US session is stored or the wait runs
+  out, then decides on whatever is stored. A decision taken late is still taken before the next open; one never
+  taken can't be made up.
 - **Every step runs even if an earlier one fails.** A failed ingest leaves stale data, which the run refuses on its
   own (see ``book.decide``), and scoring still updates the reports.
 - **Broker paper trading comes after scoring** (M7b, decision 0009): fetch the fills of earlier orders and reconcile,
@@ -56,53 +60,122 @@ def api_up(api: str) -> bool:
         return False
 
 
-def _via_api(api: str, log: Callable[[str], None], poll: float, timeout: float) -> dict[str, Any]:
-    """Run the three steps through a running Lab API.
+def equities_behind(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The Yahoo daily row of a freshness check, if it is behind the latest finished US session.
+
+    Args:
+        rows: Output of ``data.freshness.check`` (or ``GET /api/data/freshness``).
+
+    Returns:
+        The row when ``behind`` is above zero, otherwise None.
+    """
+    row = next((r for r in rows if r["source"] == "yahoo" and r["interval"] == "1d"), None)
+    return row if row and (row.get("behind") or 0) > 0 else None
+
+
+def wait_for_equities(fresh: Callable[[], list[dict[str, Any]]], reingest: Callable[[], Any], wait: float,
+                      retry: float, log: Callable[[str], None],
+                      sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """Re-ingest Yahoo until the latest finished US session is stored, or the wait runs out.
+
+    Args:
+        fresh: Returns the current freshness rows.
+        reingest: Ingests Yahoo once.
+        wait: Most seconds to keep trying; 0 checks once and never waits.
+        retry: Seconds between tries.
+        log: Receives progress lines.
+        sleep: Waits (replaced in tests).
+
+    Returns:
+        ``fresh`` (True when nothing is behind at the end), ``tries`` (re-ingests made), ``waited`` (seconds slept)
+        and ``message`` (the freshness message when still behind).
+    """
+    waited, tries = 0.0, 0
+    while True:
+        row = equities_behind(fresh())
+        if row is None:
+            return {"fresh": True, "tries": tries, "waited": waited, "message": ""}
+        if waited + retry > wait:
+            return {"fresh": False, "tries": tries, "waited": waited, "message": row.get("message", "")}
+        log(f"{row.get('message', 'yahoo is behind')} Trying again in {retry / 60:.0f} minutes.")
+        sleep(retry)
+        waited += retry
+        reingest()
+        tries += 1
+
+
+def _ingest_api(client: httpx.Client, source: str | None, log: Callable[[str], None], poll: float,
+                timeout: float) -> list[dict[str, Any]]:
+    """Start an ingest on the server and wait for it.
+
+    Args:
+        client: Client on the Lab API.
+        source: One source, or None for all.
+        log: Receives progress lines.
+        poll: Seconds between status checks.
+        timeout: Most seconds to wait.
+
+    Returns:
+        Per-source results of the job (empty if it never reported).
+    """
+    res = client.post("/data/ingest", json={"source": source} if source else {})
+    if res.status_code == 409:
+        log("an ingest is already running; waiting for it")
+        job_id = None
+    else:
+        res.raise_for_status()
+        job_id = res.json()["id"]
+    started, job = time.monotonic(), None
+    while time.monotonic() - started < timeout:
+        jobs = client.get("/data/jobs").json()
+        job = next((j for j in jobs if j["id"] == job_id), None) if job_id else (jobs[0] if jobs else None)
+        if job is None or job["status"] != "running":
+            break
+        time.sleep(poll)
+    if job and job["status"] == "running":
+        log(f"ingest still running after {timeout:.0f} s; deciding on the data stored so far")
+    return (job or {}).get("results", [])
+
+
+def _via_api(api: str, log: Callable[[str], None], poll: float, timeout: float, wait: float = 0.0,
+             retry: float = 1200.0) -> dict[str, Any]:
+    """Run the steps through a running Lab API.
 
     Args:
         api: Base URL of the API.
         log: Receives progress lines.
         poll: Seconds between ingest status checks.
         timeout: Most seconds to wait for the ingest.
+        wait: Most seconds to wait for a late US close (see ``wait_for_equities``).
+        retry: Seconds between Yahoo re-ingests while waiting.
 
     Returns:
-        ``ingest`` (per-source results), ``run`` and ``score`` (per-entry results).
+        ``ingest`` (per-source results), ``wait``, ``run`` and ``score`` (per-entry results) and ``broker``.
     """
     with httpx.Client(base_url=api, timeout=120) as client:
-        res = client.post("/data/ingest", json={})
-        if res.status_code == 409:
-            log("an ingest is already running; waiting for it")
-            job_id = None
-        else:
-            res.raise_for_status()
-            job_id = res.json()["id"]
-        started, job = time.monotonic(), None
-        while time.monotonic() - started < timeout:
-            jobs = client.get("/data/jobs").json()
-            job = next((j for j in jobs if j["id"] == job_id), None) if job_id else (jobs[0] if jobs else None)
-            if job is None or job["status"] != "running":
-                break
-            time.sleep(poll)
-        ingest = (job or {}).get("results", [])
-        if job and job["status"] == "running":
-            log(f"ingest still running after {timeout:.0f} s; deciding on the data stored so far")
+        ingest = _ingest_api(client, None, log, poll, timeout)
+        waited = wait_for_equities(lambda: client.get("/data/freshness").json(),
+                                   lambda: _ingest_api(client, "yahoo", log, poll, timeout), wait, retry, log)
         run = client.post("/paper/run").json()
         score = client.post("/paper/score").json()
         broker = {"sync": client.post("/broker/sync").json(), "execute": client.post("/broker/execute").json()}
-    return {"ingest": ingest, "run": run, "score": score, "broker": broker}
+    return {"ingest": ingest, "wait": waited, "run": run, "score": score, "broker": broker}
 
 
-def _in_process(log: Callable[[str], None]) -> dict[str, Any]:
-    """Run the three steps in this process.
+def _in_process(log: Callable[[str], None], wait: float = 0.0, retry: float = 1200.0) -> dict[str, Any]:
+    """Run the steps in this process.
 
     Args:
         log: Receives progress lines.
+        wait: Most seconds to wait for a late US close (see ``wait_for_equities``).
+        retry: Seconds between Yahoo re-ingests while waiting.
 
     Returns:
-        ``ingest`` (per-source results), ``run`` and ``score`` (per-entry results) and ``broker`` (``sync`` and
-        ``execute``).
+        ``ingest`` (per-source results), ``wait``, ``run`` and ``score`` (per-entry results) and ``broker``
+        (``sync`` and ``execute``).
     """
     from ..broker import execution
+    from ..data import freshness
     from ..data.ingest import SOURCES, ingest
     from . import book, score
 
@@ -114,9 +187,17 @@ def _in_process(log: Callable[[str], None]) -> dict[str, Any]:
                             "errors": res["errors"]})
         except Exception as err:  # one failed source must not stop the decisions
             results.append({"source": name, "status": "error", "n_series": 0, "errors": [str(err)]})
+
+    def again() -> None:
+        try:
+            ingest("yahoo", log=log, actor="nightly")
+        except Exception as err:  # keep waiting; the next try may work
+            log(f"yahoo re-ingest failed: {err}")
+
+    waited = wait_for_equities(freshness.check, again, wait, retry, log)
     run, scored = book.run(actor="nightly"), score.score(actor="nightly")
     broker = {"sync": execution.sync(), "execute": execution.execute(actor="nightly")}
-    return {"ingest": results, "run": run, "score": scored, "broker": broker}
+    return {"ingest": results, "wait": waited, "run": run, "score": scored, "broker": broker}
 
 
 def summary(res: dict[str, Any], started: datetime, finished: datetime) -> dict[str, Any]:
@@ -141,6 +222,7 @@ def summary(res: dict[str, Any], started: datetime, finished: datetime) -> dict[
         "started_at": started.isoformat(timespec="seconds"), "finished_at": finished.isoformat(timespec="seconds"),
         "ingest": [{"source": r["source"], "status": r["status"], "n_series": r.get("n_series", 0),
                     "errors": [str(e) for e in r.get("errors", [])][:3]} for r in res.get("ingest", [])],
+        "wait": res.get("wait") or {},
         "run": {**{k: sum(r["status"] == k for r in run) for k in ("decided", "exists", "refused", "error")},
                 "messages": [r["message"] for r in run if r["status"] in ("refused", "error")][:5]},
         "score": {"scored": sum(r["status"] == "scored" for r in score),
@@ -179,7 +261,7 @@ def _report(mode: str, api: str, summ: dict[str, Any]) -> dict[str, Any]:
 
 
 def nightly(api: str = DEFAULT_API, log: Callable[[str], None] = print, poll: float = 5.0,
-            timeout: float = 1800.0, report: bool = True) -> dict[str, Any]:
+            timeout: float = 1800.0, report: bool = True, wait: float = 0.0, retry: float = 1200.0) -> dict[str, Any]:
     """Ingest, decide, score and report, through the API when the server is running.
 
     Args:
@@ -188,6 +270,8 @@ def nightly(api: str = DEFAULT_API, log: Callable[[str], None] = print, poll: fl
         poll: Seconds between ingest status checks (API mode).
         timeout: Most seconds to wait for the ingest (API mode).
         report: Build the daily report and raise its alerts at the end.
+        wait: Most seconds to wait for a late US close before deciding (0 decides at once).
+        retry: Seconds between Yahoo re-ingests while waiting.
 
     Returns:
         ``mode`` (``"api"`` or ``"local"``), ``ingest``, ``run``, ``score``, ``ok`` (False when a source failed
@@ -199,7 +283,7 @@ def nightly(api: str = DEFAULT_API, log: Callable[[str], None] = print, poll: fl
     log(f"nightly paper job ({mode})")
     error = None
     try:
-        out = _via_api(api, log, poll, timeout) if mode == "api" else _in_process(log)
+        out = _via_api(api, log, poll, timeout, wait, retry) if mode == "api" else _in_process(log, wait, retry)
     except Exception as err:  # a crashed step must still end in a report and an alert
         out, error = {"ingest": [], "run": [], "score": [], "broker": {}}, f"{type(err).__name__}: {err}"
         log(f"the job stopped: {error}")

@@ -302,6 +302,13 @@ def headline(rep: dict[str, Any]) -> list[dict[str, str]]:
         out.append({"topic": "nightly", "tone": "ok" if this.get("ok") else "bad",
                     "text": "Nightly job: every step ran cleanly." if this.get("ok") else
                     "Nightly job: finished with problems (see the alert)."})
+        waited = this.get("wait") or {}
+        if waited.get("tries"):
+            out.append({"topic": "nightly", "tone": "ok" if waited.get("fresh") else "warn",
+                        "text": f"Yahoo published the close late: the job re-ingested {waited['tries']} times over "
+                                f"{waited.get('waited', 0) / 60:.0f} minutes"
+                                + (" and then decided." if waited.get("fresh") else
+                                   f" and decided without it ({waited.get('message', '')})")})
     elif last is None:
         out.append({"topic": "nightly", "tone": "warn",
                     "text": "The nightly job hasn't reported yet: run make paper-nightly after the close, or install "

@@ -66,6 +66,28 @@ def test_yahoo_keys_bars_by_session_date_and_reads_events():
     assert events.iloc[0]["kind"] == "dividend" and events.iloc[0]["value"] == 1.5
 
 
+def test_yahoo_tops_up_a_lagging_history_on_its_dividend_basis():
+    """Sessions only the short query has are appended, rescaled so adjusted returns stay right across an ex-date."""
+    days = pd.to_datetime(["2026-10-19", "2026-10-20", "2026-10-21"], utc=True)
+    full = pd.DataFrame({"ts": days[:2], "open": [100.0, 101.0], "high": [101.0, 102.0], "low": [99.0, 100.0],
+                         "close": [100.0, 101.0], "adj_close": [100.0, 101.0], "volume": [1.0, 1.0]})
+    # A 1.0 dividend went ex on 2026-10-21: the short query's earlier adjusted closes sit lower by 100/101.
+    k = 1 - 1.0 / 101.0
+    recent = pd.DataFrame({"ts": days, "open": [100.0, 101.0, 100.5], "high": [101.0, 102.0, 101.0],
+                           "low": [99.0, 100.0, 99.5], "close": [100.0, 101.0, 100.5],
+                           "adj_close": [100.0 * k, 101.0 * k, 100.5], "volume": [1.0, 1.0, 1.0]})
+    ev = pd.DataFrame({"ts": days[2:], "kind": ["dividend"], "value": [1.0]})
+    empty = pd.DataFrame(columns=["ts", "kind", "value"])
+    bars, events = yahoo.merge_recent(full, empty, recent, ev)
+    assert list(bars["ts"].dt.strftime("%Y-%m-%d")) == ["2026-10-19", "2026-10-20", "2026-10-21"]
+    assert bars["adj_close"].iloc[2] / bars["adj_close"].iloc[1] == pytest.approx(100.5 / (101.0 * k))
+    assert bars["close"].iloc[2] == 100.5 and events["kind"].tolist() == ["dividend"]
+    same, _ = yahoo.merge_recent(full, empty, recent.iloc[:2], empty)
+    assert len(same) == 2
+    disjoint, _ = yahoo.merge_recent(full, empty, recent.iloc[2:], ev)
+    assert len(disjoint) == 2  # no shared session to put the new bar on the history's basis
+
+
 def test_french_parses_percent_into_fractions():
     """Preamble, header, rows, then a blank line and the copyright notice."""
     text = (

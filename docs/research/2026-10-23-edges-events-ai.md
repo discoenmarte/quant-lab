@@ -1,5 +1,8 @@
 # Edges, events and AI: what quant-lab can honestly hunt for, and how to be ready for 2027
 
+> Read it as a web page: [Quant Lab Research Report](https://claude.ai/artifact/PP9SFwXp2x79BgrdwxiGvi) (private until
+> shared from its Share menu).
+
 *Research report, dated 2026-10-23. Sources were read on 2026-10-22. Owner: discoenmarte.*
 
 This report answers six questions the owner asked: where durable edges still exist for an individual systematic

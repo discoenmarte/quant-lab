@@ -365,10 +365,11 @@ def record(rows: list[dict[str, Any]], now: datetime) -> dict[str, list[dict[str
             if key in current:
                 r = current[key]
                 sev = "severe" if "severe" in (r["severity"], a["severity"]) else "notable"
-                con.execute("""UPDATE radar_anomalies SET ts = ?, value = ?, score = ?, severity = ?, last_seen = ?,
-                               message = ? WHERE anomaly_id = ?""",
-                            [naive_utc(pd.Timestamp(r["ts"]).to_pydatetime()), r["value"], r["score"], sev, when,
-                             describe({**r, "severity": sev})["message"], a["anomaly_id"]])
+                con.execute("""UPDATE radar_anomalies SET started = ?, ts = ?, value = ?, score = ?, threshold = ?,
+                               severity = ?, last_seen = ?, message = ? WHERE anomaly_id = ?""",
+                            [naive_utc(pd.Timestamp(r["since"]).to_pydatetime()),
+                             naive_utc(pd.Timestamp(r["ts"]).to_pydatetime()), r["value"], r["score"], r["notable"],
+                             sev, when, describe({**r, "severity": sev})["message"], a["anomaly_id"]])
                 updated.append({**a, "severity": sev, "score": r["score"]})
             elif key in seen or a["signal"] not in {r["signal"] for r in rows}:
                 con.execute("UPDATE radar_anomalies SET status = 'closed', last_seen = ? WHERE anomaly_id = ?",

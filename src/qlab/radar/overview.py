@@ -99,13 +99,12 @@ def overview(now: datetime | None = None) -> dict[str, Any]:
         p["series"] += 1
         if r["last_published"] and (p["last_published"] is None or r["last_published"] > p["last_published"]):
             p["last_published"] = r["last_published"]
-    sources = []
-    for r in store.sources():
-        sources.append({**r, **per_source.get(r["source"], {"series": 0, "last_published": None})})
-    for src in ("cboe", "fred", "fng"):  # stress series report under the "stress" collector
-        if src in per_source:
-            sources.append({"source": src, "status": None, "message": "", "last_attempt": None, "last_success": None,
-                            **per_source[src]})
+    stress = [per_source[s] for s in ("cboe", "fred", "fng") if s in per_source]  # the stress collector's files
+    if stress:
+        per_source["stress"] = {"series": sum(p["series"] for p in stress),
+                                "last_published": max((p["last_published"] for p in stress if p["last_published"]),
+                                                      default=None)}
+    sources = [{**r, **per_source.get(r["source"], {"series": 0, "last_published": None})} for r in store.sources()]
     week = naive_utc(now - timedelta(days=7))
     recent = [a for a in scan.anomalies("closed", 100) if a["last_seen"] and a["last_seen"] >= week.isoformat()]
     radar_alerts = [a for a in alerts.recent(50) if a["rule"] == "radar"][:10]

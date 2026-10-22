@@ -336,6 +336,20 @@ SCHEMA = [
 ]
 
 
+SCHEMA.append(
+    # M8: the owner's written go-live plan for an entry (loss budget, stop rule, affordability). Append-only; it changes
+    # nothing by itself (decision 0013).
+    """CREATE TABLE IF NOT EXISTS golive_plans (
+        entry_id VARCHAR,
+        created_at TIMESTAMP,
+        capital DOUBLE,
+        loss_budget DOUBLE,
+        stop_rule VARCHAR,
+        affirmed BOOLEAN,
+        reason VARCHAR,
+        actor VARCHAR
+    )""")
+
 MIGRATIONS = [
     # M1: series carry their kind (bars or factors) and a content hash.
     "ALTER TABLE series ADD COLUMN IF NOT EXISTS kind VARCHAR",

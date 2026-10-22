@@ -402,3 +402,47 @@ def test_the_broker_api_reports_status_and_kills_without_a_form():
     assert client.post("/api/broker/resume", json={"reason": "ok", "confirm": "yes"}).status_code == 400
     res = client.post("/api/broker/resume", json={"reason": "tested the switch", "confirm": "RESUME"})
     assert res.status_code == 200 and client.get("/api/broker/status").json()["controls"]["pending"]
+
+
+# --- The go-live gate (M8) ---------------------------------------------------------------------------------------
+
+
+def test_the_gate_reads_the_evidence_and_the_plan_changes_nothing_else(entry):
+    """A rejected near-miss shows red research items whatever else is green; a plan ticks only its own items."""
+    from qlab import golive
+
+    item, day = entry
+    first = golive.checklist(item["entry_id"])
+    keys = [i["key"] for i in first["items"]]
+    assert keys[:5] == ["validated", "full_n", "thresholds_before", "lockbox_once", "diversifies"]
+    assert not first["ready"] and first["met"] < first["total"]
+    assert first["items"][0]["ok"] is False and "can't go live" in first["next_step"]
+    assert {i["key"] for i in first["items"] if i["group"] == "plan"} == {"loss_budget", "stop_rule", "affordable"}
+    with pytest.raises(ValueError, match="exceed"):
+        golive.write_plan(item["entry_id"], 1000, 2000, "", True, "test")
+    golive.write_plan(item["entry_id"], 1000, 300, "", True, "write it down")
+    after = golive.checklist(item["entry_id"])
+    plan_items = {i["key"]: i["ok"] for i in after["items"] if i["group"] == "plan"}
+    assert plan_items == {"loss_budget": True, "stop_rule": True, "affordable": True}
+    assert after["met"] == first["met"] + 3 and not after["ready"]
+    assert golive.overview()["live_path"] is False  # the lab has no live order path (decision 0013)
+
+
+def test_the_gate_api_and_the_bot_show_the_checklist(entry):
+    """The page's endpoints and the bot's /golive read the same checklist; signing needs the owner's name."""
+    from fastapi.testclient import TestClient
+
+    from qlab import bot
+    from qlab.api.main import create_app
+
+    item, _ = entry
+    client = TestClient(create_app())
+    over = client.get("/api/golive").json()
+    assert over["entries"][0]["entry_id"] == item["entry_id"] and over["live_path"] is False
+    assert client.get("/api/golive/nope").status_code == 404
+    body = {"capital": 500, "loss_budget": 100, "affirmed": True, "reason": "test", "confirm": "someone else"}
+    assert client.post(f"/api/golive/{item['entry_id']}/plan", json=body).status_code == 400
+    signed = client.post(f"/api/golive/{item['entry_id']}/plan", json={**body, "confirm": over["owner"]}).json()
+    assert any(i["key"] == "loss_budget" and i["ok"] for i in signed["items"])
+    text = bot.handle("/golive", bot.Lab(client=TestClient(create_app(), base_url="http://test/api")), bot.State())
+    assert "trend_filter:test_pair:1d" in text and "met" in text

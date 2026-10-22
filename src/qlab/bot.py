@@ -50,6 +50,7 @@ Read:
 /board   strategies by lifecycle state
 /alerts  the last alerts
 /mining  recent mining jobs and budgets
+/golive  the go-live checklist (no real money until it is all green)
 
 Reduce risk:
 /pause   stop new orders (positions kept)
@@ -342,8 +343,29 @@ def _mining(lab: Lab) -> str:
     return "\n".join(lines) or "No mining yet."
 
 
+def _golive(lab: Lab) -> str:
+    """The ``/golive`` answer.
+
+    Args:
+        lab: The Lab API.
+
+    Returns:
+        Each active entry's checklist count, its blocking items and the next step.
+    """
+    rows = lab.get("/golive")["entries"]
+    if not rows:
+        return "No active paper-book entry yet."
+    out = []
+    for r in rows:
+        out.append(f"{r['question']} ({r['verdict']}): {r['met']} of {r['total']} met; paper time no earlier than "
+                   f"{r['earliest_paper_date']}.")
+        out += [f"  ✗ {b}" for b in r["blocking"][:6]]
+        out.append(f"  → {r['next_step']}")
+    return "\n".join(out)
+
+
 READERS: dict[str, Callable[[Lab], str]] = {"/status": _status, "/pnl": _pnl, "/report": _report, "/board": _board,
-                                            "/alerts": _alerts, "/mining": _mining}
+                                            "/alerts": _alerts, "/mining": _mining, "/golive": _golive}
 
 
 def handle(text: str, lab: Lab, state: State, now: datetime | None = None) -> str:

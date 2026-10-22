@@ -683,6 +683,64 @@ def alerts_test() -> None:
         typer.echo(f"  {name:<9} {result}")
 
 
+golive_app = typer.Typer(help="Go-live gate (M8): the evidence checklist before any real money, and your plan",
+                         no_args_is_help=False, invoke_without_command=True)
+app.add_typer(golive_app, name="golive")
+
+
+@golive_app.callback()
+def golive_show(ctx: typer.Context, entry_id: str = typer.Option("", "--entry", help="Only this paper-book entry")
+                ) -> None:
+    """Show the go-live checklist of every active paper-book entry (or one), item by item.
+
+    Args:
+        ctx: Typer context (a subcommand skips the listing).
+        entry_id: One entry.
+    """
+    if ctx.invoked_subcommand:
+        return
+    from . import golive
+
+    rows = [golive.checklist(entry_id)] if entry_id else golive.overview()["entries"]
+    if not rows:
+        typer.echo("No active paper-book entry yet.")
+    for r in rows:
+        typer.echo(f"{r['entry_id']}  {r['question']}  ({r['verdict']})  {r['met']} of {r['total']} met")
+        for i in r["items"]:
+            mark = {True: "ok ", False: "NO ", None: " ? "}[i["ok"]]
+            typer.echo(f"   {mark} {i['label']}: {i['detail']}")
+        typer.echo(f"   next: {r['next_step']}")
+
+
+@golive_app.command("plan")
+def golive_plan(entry_id: str,
+                capital: float = typer.Option(..., help="USD you would put in"),
+                loss_budget: float = typer.Option(..., help="The most you accept to lose, USD"),
+                stop_rule: str = typer.Option("", help="When to stop; empty uses the suggested rule"),
+                affirm: bool = typer.Option(False, help="This is money you can afford to lose entirely"),
+                reason: str = typer.Option(..., help="Why"),
+                confirm: str = typer.Option(..., help="Your name, typed, to sign the plan")) -> None:
+    """Write down your plan for an entry. It changes nothing by itself; it is one of the checklist's items.
+
+    Args:
+        entry_id: Paper-book entry.
+        capital: Money in, USD.
+        loss_budget: Maximum loss, USD.
+        stop_rule: Stop rule.
+        affirm: Affordability affirmed.
+        reason: Why.
+        confirm: Owner's name.
+    """
+    from . import golive
+
+    owner = golive.overview()["owner"]
+    if confirm.strip() != owner:
+        raise typer.BadParameter(f"type your name ({owner}) to sign the plan")
+    golive.write_plan(entry_id, capital, loss_budget, stop_rule, affirm, reason, actor="cli")
+    r = golive.checklist(entry_id)
+    typer.echo(f"plan saved; {r['met']} of {r['total']} items met. {r['next_step']}")
+
+
 bot_app = typer.Typer(help="Telegram bot: read the lab and reduce risk from a phone; a watchdog for quiet nights",
                       no_args_is_help=True)
 app.add_typer(bot_app, name="bot")

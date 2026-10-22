@@ -155,3 +155,18 @@ def test_the_report_line_says_quiet_or_names_what_is_open(small_watchlist):
     put("wiki", "recession", "views", v, label="Wikipedia: Recession")
     scan.run(NOW, notify=False)
     assert "Wikipedia: Recession" in scan.line()["text"]
+
+
+def test_the_daily_report_carries_the_radar_line(small_watchlist):
+    """The report's headline gains one radar sentence, and a report is built even before any scan."""
+    from qlab import report
+
+    rep = report.build(NOW, notify=False)
+    assert any(h["topic"] == "radar" and "no scan yet" in h["text"] for h in rep["headline"])
+    v = calm(800, 40)
+    v[-1] = 90_000
+    put("wiki", "bank_run", "views", v, label="Wikipedia: Bank run")
+    scan.run(NOW, notify=False)
+    rep = report.build(NOW + timedelta(hours=1), notify=False)
+    line = next(h for h in rep["headline"] if h["topic"] == "radar")
+    assert "Wikipedia: Bank run" in line["text"] and line["tone"] == "warn"

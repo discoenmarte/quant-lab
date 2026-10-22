@@ -200,7 +200,7 @@ def headline(rep: dict[str, Any]) -> list[dict[str, str]]:
 
     Args:
         rep: A report with its sections filled in (``trials``, ``verdicts``, ``transitions``, ``registry``, ``paper``,
-            ``freshness``, ``nightly``).
+            ``freshness``, ``nightly``, and optionally ``radar``).
 
     Returns:
         Items ``{"topic", "tone", "text"}``; tone is ``ok``, ``good``, ``info``, ``warn`` or ``bad``.
@@ -296,6 +296,9 @@ def headline(rep: dict[str, Any]) -> list[dict[str, str]]:
         out.append({"topic": "data", "tone": "ok",
                     "text": "Data is fresh: " + ", ".join(f"{f['source']} through {f['oldest']}" for f in daily) + "."})
 
+    if rep.get("radar"):
+        out.append(rep["radar"])
+
     n = rep["nightly"]
     this, last = n.get("this_run"), n.get("last")
     if this is not None:
@@ -320,6 +323,23 @@ def headline(rep: dict[str, Any]) -> list[dict[str, str]]:
                     "text": f"Last nightly job {last['ts'][:16].replace('T', ' ')} UTC ({age:.0f} h ago): "
                             + ("ok." if last["ok"] else "finished with problems.")})
     return out
+
+
+def radar_line(now: datetime) -> dict[str, str] | None:
+    """The radar's line for the headline, or None when the radar can't say anything (a report never fails for it).
+
+    Args:
+        now: Time of the report.
+
+    Returns:
+        ``{"topic": "radar", "tone", "text"}`` or None.
+    """
+    from .radar import scan  # the radar builds on the alerts and the report's tables; imported here, one-way
+
+    try:
+        return scan.line(now)
+    except Exception:  # the radar's own failure shows on its page; the daily report goes out regardless
+        return None
 
 
 def _previous() -> dict[str, Any] | None:
@@ -379,7 +399,8 @@ def build(now: datetime | None = None, trigger: str = "cli", nightly: dict[str, 
 
     Returns:
         The report: ``report_id, created_at, since, previous_id, trigger, headline, trials, verdicts, transitions,
-        registry`` (``counts``, ``cards``), ``paper``, ``freshness``, ``nightly`` (``this_run``, ``last``),
+        registry`` (``counts``, ``cards``), ``paper``, ``freshness``, ``nightly`` (``this_run``, ``last``), ``radar``
+        (its headline line, or None),
         ``alerts`` (raised by this report, with delivery per channel) and ``conditions``.
     """
     now = now or now_utc()
@@ -413,6 +434,7 @@ def build(now: datetime | None = None, trigger: str = "cli", nightly: dict[str, 
         "paper": paper_since(since),
         "freshness": freshness.check(now),
         "nightly": {"this_run": nightly, "last": last_nightly()},
+        "radar": radar_line(now),
     }
     rep["headline"] = headline(rep)
     raised = alerts.evaluate(rep, prev["conditions"] if prev else None, nightly)

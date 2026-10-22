@@ -27,6 +27,7 @@ def test_reading_commands_answer_from_the_api():
     assert "Rejected 0" in bot.handle("/board", lb, st)
     assert bot.handle("/alerts", lb, st) == "No alerts yet."
     assert bot.handle("/mining", lb, st) == "No mining yet."
+    assert bot.handle("/radar", lb, st) == "The radar hasn't scanned yet."
     assert bot.handle("hello", lb, st) == bot.HELP and bot.handle("/status@quantlab_bot", lb, st).startswith("Trading")
 
 

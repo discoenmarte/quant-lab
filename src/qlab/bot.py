@@ -8,8 +8,9 @@ Design (decision 0012):
   needs no inbound connection, domain or certificate.
 - **Only the owner's chat.** Messages from any chat but ``QLAB_TELEGRAM_CHAT`` are ignored and never answered.
 - **Asymmetric, like the web app.** Reading is free (``/status``, ``/pnl``, ``/report``, ``/board``, ``/alerts``,
-  ``/mining``). Reducing risk works from the phone: ``/pause`` at once, ``/kill`` after typing back a code that
-  expires in two minutes. Nothing that adds risk exists here: no resume, no enrolment, no looser limits.
+  ``/mining``, ``/golive``, ``/radar``). Reducing risk works from the phone: ``/pause`` at once, ``/kill`` after
+  typing back a code that expires in two minutes. Nothing that adds risk exists here: no resume, no enrolment, no
+  looser limits.
 - **A watchdog inside, and one outside.** Every few minutes the bot checks that the API answers and that a daily
   report arrived after the last US session; either failing sends one message straight to Telegram (it doesn't need
   the database). A dead server can't report itself, so the jobs also ping an outside dead-man's switch
@@ -51,6 +52,7 @@ Read:
 /alerts  the last alerts
 /mining  recent mining jobs and budgets
 /golive  the go-live checklist (no real money until it is all green)
+/radar   open anomalies, the latest scan and the biggest moves on the scenario board
 
 Reduce risk:
 /pause   stop new orders (positions kept)
@@ -372,8 +374,37 @@ def _golive(lab: Lab) -> str:
     return "\n".join(out)
 
 
+def _radar(lab: Lab) -> str:
+    """The ``/radar`` answer (read-only).
+
+    Args:
+        lab: The Lab API.
+
+    Returns:
+        The latest scan, each open anomaly (severe first) and the three biggest weekly moves on the scenario board.
+    """
+    o = lab.get("/radar")
+    s = o.get("scan")
+    if s is None:
+        return "The radar hasn't scanned yet."
+    lines = [f"Radar scan {s['created_at'][:16].replace('T', ' ')} UTC: {s['open']['severe']} severe, "
+             f"{s['open']['notable']} notable open; automatic pause {'ON' if o.get('autopause') else 'off'}."]
+    if (s.get("coincidence") or {}).get("active"):
+        lines.append("Several severe anomalies at once (see /alerts).")
+    for a in o["anomalies"][:8]:
+        lines.append(f"• [{a['severity']}] {a['label']} ({a['detector']}, since {str(a['started'])[:10]})")
+    moves = [(m["change_7d"], sc["title"], m) for sc in o["scenarios"]["scenarios"] for m in sc["markets"]
+             if m.get("change_7d") is not None]
+    moves.sort(key=lambda t: -abs(t[0]))
+    if moves:
+        lines.append("Scenario board, biggest moves in 7 days (information, not signals):")
+        lines += [f"• {m['label']}: {m['prob']:.0%} ({ch * 100:+.0f} pts)" for ch, _t, m in moves[:3]]
+    return "\n".join(lines)
+
+
 READERS: dict[str, Callable[[Lab], str]] = {"/status": _status, "/pnl": _pnl, "/report": _report, "/board": _board,
-                                            "/alerts": _alerts, "/mining": _mining, "/golive": _golive}
+                                            "/alerts": _alerts, "/mining": _mining, "/golive": _golive,
+                                            "/radar": _radar}
 
 
 def handle(text: str, lab: Lab, state: State, now: datetime | None = None) -> str:

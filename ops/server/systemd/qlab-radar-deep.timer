@@ -1,0 +1,11 @@
+# quant-lab: when to run qlab-radar-deep.service: before the US open, after Wikipedia publishes yesterday's views.
+[Unit]
+Description=quant-lab radar deep pass schedule
+
+[Timer]
+OnCalendar=*-*-* 08:00 America/New_York
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

@@ -1589,6 +1589,9 @@ def _print_scan(out: dict) -> None:
     Args:
         out: Output of ``radar.scan.run``.
     """
+    if out.get("skipped"):
+        typer.echo("scan skipped: another radar scan is still running")
+        return
     o = out["open"]
     typer.echo(f"scan {out['run_id']}: {out['n_signals']} signals, {o['severe']} severe and {o['notable']} notable "
                f"anomalies open; opened {len(out['opened'])}, closed {len(out['closed'])}")

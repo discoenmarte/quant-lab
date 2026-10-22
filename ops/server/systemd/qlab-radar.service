@@ -1,0 +1,14 @@
+# quant-lab: the radar's quick pass: prediction markets, Hacker News, stress files, a little GDELT, then a scan
+[Unit]
+Description=quant-lab radar quick pass: collect what changes fast, then scan for anomalies
+After=qlab-api.service
+Wants=qlab-api.service
+
+[Service]
+Type=oneshot
+User=qlab
+WorkingDirectory=/srv/quant-lab
+Environment=PYTHONUNBUFFERED=1
+# The leading "-" keeps a failed quick pass from alerting every 15 minutes; the daily deep pass alerts on failure.
+ExecStart=-/srv/quant-lab/.venv/bin/qlab radar run
+TimeoutStartSec=14min

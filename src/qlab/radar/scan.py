@@ -23,6 +23,7 @@ Design (decision 0016):
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 import zlib
 from collections.abc import Callable
@@ -45,6 +46,7 @@ COINCIDENCE_MIN = 3
 COINCIDENCE_WINDOW = timedelta(hours=24)
 MARKET_PREFIXES = ("prices/", "cboe/", "fred/")
 INVERSION = 1.0  # VIX above VIX3M: the term structure's definition of stress, a fact rather than a tuned threshold
+_lock = threading.Lock()  # one scan at a time: the quick and deep passes can overlap inside the API process
 
 
 def calibration_dir():
@@ -549,9 +551,34 @@ def run(now: datetime | None = None, recalibrate: bool = False, notify: bool = T
 
     Returns:
         ``run_id, created_at, calibration`` (id), ``n_signals``, ``readings``, ``open`` (anomaly counts by
-        severity), ``opened``, ``closed``, ``alerts``, ``coincidence`` and ``paused``.
+        severity), ``opened``, ``closed``, ``alerts``, ``coincidence``, ``paused`` and ``skipped`` (another scan was
+        running, so this one did nothing).
     """
     now = now or now_utc()
+    if not _lock.acquire(blocking=False):
+        return {"run_id": None, "created_at": naive_utc(now).isoformat(timespec="seconds"), "calibration": None,
+                "n_signals": 0, "readings": [], "open": {"severe": 0, "notable": 0}, "opened": [], "closed": [],
+                "alerts": [], "coincidence": {}, "paused": False, "skipped": True}
+    try:
+        return _run(now, recalibrate, notify, log, actor)
+    finally:
+        _lock.release()
+
+
+def _run(now: datetime, recalibrate: bool, notify: bool, log: Callable[[str], None] | None,
+         actor: str) -> dict[str, Any]:
+    """The scan itself (``run`` holds the lock).
+
+    Args:
+        now: Time of the scan.
+        recalibrate: Calibrate even if the latest calibration is recent.
+        notify: False sends alerts to the file channel only.
+        log: Receives progress lines.
+        actor: Who ran it.
+
+    Returns:
+        See ``run``.
+    """
     sigs = signals.build()
     cal = latest_calibration()
     old = cal is None or (pd.Timestamp(now).tz_convert("UTC").tz_localize(None)
@@ -576,7 +603,7 @@ def run(now: datetime | None = None, recalibrate: bool = False, notify: bool = T
         "opened": [o["signal"] + "|" + o["detector"] for o in rec["opened"]],
         "closed": [c["signal"] + "|" + c["detector"] for c in rec["closed"]],
         "alerts": [a["title"] for a in out_alerts["alerts"]], "coincidence": out_alerts["coincidence"],
-        "paused": out_alerts["paused"] is not None,
+        "paused": out_alerts["paused"] is not None, "skipped": False,
     })
     with db.connect() as con:
         con.execute("INSERT INTO radar_runs (run_id, started_at, finished_at, kind, ok, summary) "

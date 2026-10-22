@@ -93,3 +93,18 @@ def test_the_api_serves_the_radar_and_refuses_unknown_passes_and_signals(isolate
     assert client.post("/api/radar/run", json={"kind": "quick", "only": ["metaculus"]}).status_code == 400
     out = client.post("/api/radar/scan", json={}).json()
     assert out["n_signals"] == 0 and "readings" not in out
+
+
+def test_the_server_runs_the_radar_through_the_api_on_its_own_timers():
+    """Each radar timer has its service, both call `qlab radar run`, deploy enables them, and the heartbeat is apart."""
+    from qlab import config
+
+    units = config.ROOT / "ops" / "server" / "systemd"
+    deploy = (config.ROOT / "ops" / "server" / "deploy.sh").read_text()
+    for name, cmd in (("qlab-radar", "qlab radar run\n"), ("qlab-radar-deep", "qlab radar run --deep\n")):
+        service = (units / f"{name}.service").read_text()
+        assert (units / f"{name}.timer").exists() and cmd in service and f"{name}.timer" in deploy
+        assert "heartbeat" not in service
+    assert "OnFailure" not in (units / "qlab-radar.service").read_text()  # no alert storm every 15 minutes
+    assert "OnFailure" in (units / "qlab-radar-deep.service").read_text()
+    assert "*:0/15" in (units / "qlab-radar.timer").read_text()

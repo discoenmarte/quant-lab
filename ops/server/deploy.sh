@@ -55,7 +55,7 @@ set -euo pipefail
 cp $remote/ops/server/systemd/qlab-* /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now qlab-api.service qlab-nightly.timer qlab-morning.timer qlab-mining.timer \
-  qlab-backup.timer qlab-heartbeat.timer >/dev/null
+  qlab-backup.timer qlab-heartbeat.timer qlab-radar.timer qlab-radar-deep.timer >/dev/null
 systemctl restart qlab-api.service
 env_has() { grep -qs "^\$1=." $remote/data/lab.env $remote/.env; }
 if env_has QLAB_TELEGRAM_TOKEN && env_has QLAB_TELEGRAM_CHAT; then
@@ -73,4 +73,4 @@ EOF
 echo "== check"
 "${rsh[@]}" "qlab@$host" "for i in \$(seq 1 20); do curl -fs http://127.0.0.1:8765/api/health && exit 0; sleep 1; done; exit 1" \
   && echo && echo "deployed. Open the lab with: ssh -N -L 8770:127.0.0.1:8765 qlab@$host  then http://127.0.0.1:8770"
-"${rsh[@]}" "root@$host" "systemctl list-timers 'qlab-*' --no-pager | head -12"
+"${rsh[@]}" "root@$host" "systemctl list-timers 'qlab-*' --no-pager | head -14"

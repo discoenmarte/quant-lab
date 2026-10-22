@@ -799,6 +799,51 @@ def bot_run(api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API t
     bot.run(api, log=lambda m: typer.echo(m, err=True))
 
 
+@bot_app.command("setup")
+def bot_setup(wait: float = typer.Option(180, help="Seconds to wait for your first message to the bot")) -> None:
+    """Connect your Telegram bot: paste its token (hidden), message the bot once, and both are saved to lab.env.
+
+    Args:
+        wait: Seconds to wait for your message.
+    """
+    from . import bot, config
+
+    token = config.setting("QLAB_TELEGRAM_TOKEN") or ""
+    if not token:
+        token = typer.prompt("Paste the token @BotFather gave you (it won't be shown)", hide_input=True).strip()
+    tg = bot.Telegram(token, "")
+    try:
+        me = tg.me()
+    except bot.TelegramError as err:
+        raise typer.BadParameter(f"Telegram didn't accept that token: {err}") from None
+    config.save_setting("QLAB_TELEGRAM_TOKEN", token)
+    typer.echo(f"Token works: the bot is @{me.get('username')}. Saved in {config.env_file()} (only you can read it).")
+    typer.echo(f"Now open https://t.me/{me.get('username')} on your phone and press Start (or send 'hi').")
+    chat = bot.wait_for_owner(tg, wait)
+    if chat is None:
+        raise typer.BadParameter("no message arrived; run `qlab bot setup` again after writing to the bot")
+    config.save_setting("QLAB_TELEGRAM_CHAT", chat["id"])
+    bot.Telegram(token, chat["id"]).send("✅ quant-lab is connected. Send /help to see what I can do.")
+    typer.echo(f"Connected to {chat['name'] or 'your chat'} (chat id {chat['id']}); a test message is on its way.")
+
+
+@app.command("config")
+def config_set(name: str = typer.Argument(..., help="Setting, e.g. QLAB_HEALTHCHECK_URL"),
+               value: str = typer.Argument("", help="Value; leave empty to type it hidden")) -> None:
+    """Save one setting in lab.env (readable by you only), e.g. the healthchecks.io URL or the SEC user agent.
+
+    Args:
+        name: Setting name.
+        value: Its value; prompted for without echo when empty (for secrets).
+    """
+    from . import config as cfg
+
+    if not value:
+        value = typer.prompt(f"Value for {name} (it won't be shown)", hide_input=True).strip()
+    path = cfg.save_setting(name.strip(), value)
+    typer.echo(f"saved {name} in {path}")
+
+
 @bot_app.command("chats")
 def bot_chats(save: bool = typer.Option(False, help="Write the only private chat's id into lab.env")) -> None:
     """List the chats that wrote to the bot, to find QLAB_TELEGRAM_CHAT; optionally save it.

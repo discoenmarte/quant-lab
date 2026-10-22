@@ -127,3 +127,13 @@ def test_saving_a_setting_replaces_its_line_and_keeps_the_file_private():
     config.save_setting("QLAB_TELEGRAM_CHAT", "2")
     assert path.read_text().splitlines() == ["OTHER=x", "QLAB_TELEGRAM_CHAT=2"]
     assert oct(path.stat().st_mode & 0o777) == "0o600" and config.setting("QLAB_TELEGRAM_CHAT") == "2"
+
+
+def test_setup_waits_for_the_owners_first_private_message():
+    """The first private chat to write is the owner's; nobody writing in time gives None."""
+    sent: list = []
+    ups = [{"update_id": 1, "message": {"chat": {"id": -5, "type": "group", "title": "g"}, "text": "x"}},
+           {"update_id": 2, "message": {"chat": {"id": 77, "type": "private", "first_name": "Juan"}, "text": "hi"}}]
+    chat = bot.wait_for_owner(telegram(sent, ups), seconds=1, sleep=lambda s: None)
+    assert chat == {"id": "77", "type": "private", "name": "Juan"}
+    assert bot.wait_for_owner(telegram(sent, ups[:1]), seconds=1, poll=0.5, sleep=lambda s: None) is None

@@ -123,6 +123,14 @@ class Telegram:
         """
         self._call("sendMessage", chat_id=self.chat, text=text[:4000], disable_web_page_preview=True)
 
+    def me(self) -> dict[str, Any]:
+        """The bot's own account, which also proves the token works.
+
+        Returns:
+            ``username`` and ``first_name`` among others.
+        """
+        return self._call("getMe") or {}
+
     def chats(self) -> list[dict[str, Any]]:
         """Chats that have written to the bot recently, for finding the owner's chat id once.
 
@@ -550,3 +558,26 @@ def describe_chats(telegram: Telegram) -> str:
         return "Nobody has written to the bot yet: open it in Telegram, press Start or send any message, then retry."
     return "\n".join(f"chat id {r['id']}  ({r['type']} {r['name']})" for r in rows) + "\n" + json.dumps(
         {"QLAB_TELEGRAM_CHAT": rows[0]["id"]})
+
+
+def wait_for_owner(telegram: Telegram, seconds: float = 180.0, poll: float = 3.0,
+                   sleep: Callable[[float], None] = time.sleep) -> dict[str, Any] | None:
+    """Wait until someone writes to the bot in a private chat, for setting ``QLAB_TELEGRAM_CHAT`` once.
+
+    Args:
+        telegram: Bot API client.
+        seconds: Most seconds to wait.
+        poll: Seconds between checks.
+        sleep: Waits (replaced in tests).
+
+    Returns:
+        The first private chat (``id``, ``type``, ``name``), or None when nobody wrote in time.
+    """
+    waited = 0.0
+    while waited <= seconds:
+        private = [c for c in telegram.chats() if c["type"] == "private"]
+        if private:
+            return private[0]
+        sleep(poll)
+        waited += poll
+    return None

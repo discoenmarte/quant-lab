@@ -488,3 +488,48 @@ def test_a_mined_card_counts_mined_trials_by_the_factor(spy):
     card = jobs.send_to_gauntlet(rep["job_id"], rep["top"][0]["strategy"])
     sig = next(s for s in card["stages"] if s["key"] == "significance")
     assert card["meta"]["n_trials"] == 2 * scored and "counts 2 times" in sig["summary"]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The nightly rotation
+
+
+def test_the_rotation_picks_the_least_mined_scope_and_the_weekday_paradigm():
+    """Fewest mined trials first (ties to the first scope), a spent budget is skipped, the paradigm follows the day."""
+    from datetime import date
+
+    from qlab.mining import nightly as mn
+
+    budgets = [{"question": "mined:all_etfs:1d", "used": 750, "remaining": 1250},
+               {"question": "mined:crypto_top30:1d", "used": 500, "remaining": 1500}]
+    plan = mn.pick(budgets, ["all_etfs", "crypto_top30"], date(2026, 10, 22))  # a Thursday
+    assert plan == {"scope": "crypto_top30", "question": "mined:crypto_top30:1d", "paradigm": "gp", "trials": 250,
+                    "seed": 20261022}
+    assert mn.pick([], ["all_etfs", "crypto_top30"], date(2026, 10, 20))["scope"] == "all_etfs"  # tie, Tuesday
+    assert mn.pick([], ["all_etfs"], date(2026, 10, 20))["paradigm"] == "random"
+    spent = [{"question": "mined:all_etfs:1d", "used": 2000, "remaining": 0},
+             {"question": "mined:crypto_top30:1d", "used": 1900, "remaining": 100}]
+    assert mn.pick(spent, ["all_etfs", "crypto_top30"], date(2026, 10, 21))["trials"] == 100
+    assert "skip" in mn.pick(spent[:1], ["all_etfs"], date(2026, 10, 21))
+    assert set(mn.PARADIGMS.values()) == {"gp", "random", "tpe"}  # never the uncalibrated llm paradigm
+
+
+def test_the_nightly_rotation_mines_within_budget_and_waits_without_the_factor(spy, monkeypatch):
+    """A night mines what is left of the budget, judges only past the bar, alerts once; below 2x it waits."""
+    from qlab import alerts
+    from qlab.mining import nightly as mn
+
+    monkeypatch.setenv("QLAB_MINING_SCOPES", "SPY")
+    monkeypatch.setattr(mn, "HEAVY", "[q]lab-never-matches-this")
+    monkeypatch.setattr("qlab.paper.nightly.api_up", lambda api: False)
+    thresholds.update(FAST, "fast tests")
+    jobs.set_budget("mined:SPY:1d", 30, "small test budget")
+    out = mn.run(workers=1, minutes=5, log=lambda m: None)
+    assert out["status"] in ("mined", "judged") and out["plan"]["trials"] == 30
+    assert jobs.budget_of("mined:SPY:1d")["remaining"] == 0
+    assert out["bar"] is not None and out["clears"] == (out["best"] >= out["bar"])
+    assert (out["status"] == "judged") == out["clears"]
+    assert alerts.recent(5)[0]["rule"] == "mining_nightly"
+    assert mn.run(log=lambda m: None)["status"] == "skipped"  # budget spent
+    thresholds.update({"mining_n_factor": 1.0}, "pretend the calibration hasn't settled")
+    assert mn.run(log=lambda m: None, notify=False)["status"] == "waiting"

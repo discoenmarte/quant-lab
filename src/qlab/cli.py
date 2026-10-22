@@ -1029,6 +1029,32 @@ def mine_run(
     _print_job(jobs.run(row["job_id"], log=typer.echo))
 
 
+@mine_app.command("nightly")
+def mine_nightly(
+    workers: int = typer.Option(4, help="Evaluation processes"),
+    minutes: float = typer.Option(40.0, help="Wall-clock limit of the job"),
+    api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API; the job runs there when it is up"),
+) -> None:
+    """Tonight's rotation job: pick the scope and paradigm, mine within budget, judge the best only past the bar.
+
+    Args:
+        workers: Evaluation processes.
+        minutes: Time limit.
+        api: Lab API address.
+    """
+    from .mining import nightly
+
+    out = nightly.run(api, workers, minutes, log=typer.echo)
+    typer.echo(out["message"])
+    for i, t in enumerate(out.get("top") or [], 1):
+        edge = t["edge"] if t["edge"] is not None else float("nan")
+        dsr = t["dsr"] if t["dsr"] is not None else float("nan")
+        corr = t["corr"] if t["corr"] is not None else float("nan")
+        typer.echo(f"  {i}. edge {edge:+.2f}  DSR {dsr:.3f}  corr {corr:+.2f} with {t['rule']}  {t['text']}")
+    if "failed" in out["message"]:
+        raise typer.Exit(1)
+
+
 @mine_app.command("jobs")
 def mine_jobs(limit: int = typer.Option(20, help="How many")) -> None:
     """List recent mining jobs.

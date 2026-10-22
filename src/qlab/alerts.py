@@ -45,7 +45,8 @@ class Alert:
     """One message for the owner.
 
     Attributes:
-        rule: ``new_candidate``, ``paper_alarm``, ``stale_data``, ``nightly_failed``, ``daily_report`` or ``test``.
+        rule: ``new_candidate``, ``paper_alarm``, ``stale_data``, ``nightly_failed``, ``daily_report``, ``radar`` (the
+            radar's anomalies, raised by ``radar.scan``) or ``test``.
         severity: ``info``, ``good``, ``warn`` or ``bad``.
         key: Identity of the condition, used to alert once per occurrence.
         title: One line.

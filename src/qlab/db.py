@@ -396,6 +396,7 @@ SCHEMA += [
         anomaly_id VARCHAR PRIMARY KEY,
         signal VARCHAR,
         detector VARCHAR,
+        label VARCHAR,
         category VARCHAR,
         started TIMESTAMP,
         ts TIMESTAMP,

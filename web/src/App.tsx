@@ -14,6 +14,7 @@ import { BacktestStudio } from './pages/BacktestStudio';
 import { DataHealth } from './pages/DataHealth';
 import { Gauntlet } from './pages/Gauntlet';
 import { Glossary } from './pages/Glossary';
+import { GoLiveGate } from './pages/GoLiveGate';
 import { Home } from './pages/Home';
 import { Ledger } from './pages/Ledger';
 import { MiningLab } from './pages/MiningLab';
@@ -36,6 +37,7 @@ const PAGES: Record<string, ReactElement> = {
   '/inbox': <ResearchInbox />,
   '/mining': <MiningLab />,
   '/desk': <TradingDesk />,
+  '/gate': <GoLiveGate />,
   '/system': <System />,
   '/audit': <Audit />,
   '/glossary': <Glossary />,

@@ -32,7 +32,7 @@ MAX_SPREAD = 0.10
 KALSHI_HISTORY_DAYS = 400
 
 
-def _num(x: Any) -> float | None:
+def num(x: Any) -> float | None:
     """A price as a float.
 
     Args:
@@ -127,18 +127,18 @@ def polymarket(scenario: dict[str, Any], fetcher: store.Fetcher, t: pd.Timestamp
     if not events:
         raise SourceError(f"no Polymarket event {scenario['event']}")
     markets = [m for m in events[0].get("markets") or [] if not m.get("closed")]
-    markets.sort(key=lambda m: -(_num(m.get("volumeNum") or m.get("volume")) or 0.0))
+    markets.sort(key=lambda m: -(num(m.get("volumeNum") or m.get("volume")) or 0.0))
     out = []
     bucket = t.floor(BUCKET)
     for m in markets[: int(scenario.get("max_markets", 3))]:
         prices = json.loads(m.get("outcomePrices") or "[]")
-        bid, ask, last = _num(m.get("bestBid")), _num(m.get("bestAsk")), _num(m.get("lastTradePrice"))
-        p = probability(bid, ask, last, _num(prices[0]) if prices else None)
+        bid, ask, last = num(m.get("bestBid")), num(m.get("bestAsk")), num(m.get("lastTradePrice"))
+        p = probability(bid, ask, last, num(prices[0]) if prices else None)
         if p is None:
             continue
         label = scenario["title"] + (f": {m['groupItemTitle']}" if m.get("groupItemTitle") else "")
         rows = [{"ts": bucket, "prob": p, "bid": bid, "ask": ask, "last": last,
-                 "volume24h": _num(m.get("volume24hr"))}]
+                 "volume24h": num(m.get("volume24hr"))}]
         if deep and history.get("reachable", True):
             tokens = json.loads(m.get("clobTokenIds") or "[]")
             try:
@@ -199,11 +199,11 @@ def kalshi(scenario: dict[str, Any], fetcher: store.Fetcher, t: pd.Timestamp, de
     m = _kalshi(fetcher, f"/markets/{tk}", None, f"{store.slug(tk)}.json", 600).get("market") or {}
     if not m:
         raise SourceError(f"no Kalshi market {tk}")
-    bid, ask = _num(m.get("yes_bid_dollars")), _num(m.get("yes_ask_dollars"))
-    last = _num(m.get("last_price_dollars"))
+    bid, ask = num(m.get("yes_bid_dollars")), num(m.get("yes_ask_dollars"))
+    last = num(m.get("last_price_dollars"))
     p = probability(bid, ask, last, last)
     rows = [] if p is None else [{"ts": t.floor(BUCKET), "prob": p, "bid": bid, "ask": ask, "last": last,
-                                  "volume24h": _num(m.get("volume_24h_fp"))}]
+                                  "volume24h": num(m.get("volume_24h_fp"))}]
     if deep:
         end = int(t.timestamp())
         body = _kalshi(fetcher, f"/series/{scenario['series']}/markets/{tk}/candlesticks",
@@ -211,13 +211,13 @@ def kalshi(scenario: dict[str, Any], fetcher: store.Fetcher, t: pd.Timestamp, de
                        f"candles_{store.slug(tk)}_{t:%Y%m%d}.json", 20 * 3600)
         for c in body.get("candlesticks") or []:
             price, yb, ya = c.get("price") or {}, c.get("yes_bid") or {}, c.get("yes_ask") or {}
-            cb, ca = _num(yb.get("close_dollars")), _num(ya.get("close_dollars"))
-            pc = probability(cb, ca, _num(price.get("close_dollars")), None)
+            cb, ca = num(yb.get("close_dollars")), num(ya.get("close_dollars"))
+            pc = probability(cb, ca, num(price.get("close_dollars")), None)
             if pc is None:
                 continue
             when = pd.Timestamp(int(c["end_period_ts"]), unit="s", tz="UTC")
             rows.append({"ts": when.floor(BUCKET), "prob": pc, "bid": cb, "ask": ca,
-                         "last": _num(price.get("close_dollars")), "published_at": when})
+                         "last": num(price.get("close_dollars")), "published_at": when})
     if not rows:
         raise SourceError(f"Kalshi market {tk} has no price")
     label = scenario["title"]

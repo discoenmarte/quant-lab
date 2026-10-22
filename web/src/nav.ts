@@ -135,7 +135,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
         planned: ['Live price feed for crypto decisions'],
       },
       { path: '/gate', label: 'Go-Live Gate', icon: 'gate', milestone: 'M8', ready: true, blurb: 'The evidence checklist before any real money, item by item.' },
-      { path: '/intraday', label: 'Intraday Cockpit', icon: 'clock', milestone: 'M9', ready: false, blurb: 'Pre-market briefing and replay.' },
+      { path: '/intraday', label: 'Intraday Cockpit', icon: 'clock', milestone: 'M9', ready: true, blurb: 'The intraday library on hourly crypto: calibration, verdicts and the morning reading.', planned: ['Live hourly feed and forward intraday paper trading, once a rule passes', 'Replay player'] },
     ],
   },
   {

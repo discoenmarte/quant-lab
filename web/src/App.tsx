@@ -16,6 +16,7 @@ import { Gauntlet } from './pages/Gauntlet';
 import { Glossary } from './pages/Glossary';
 import { GoLiveGate } from './pages/GoLiveGate';
 import { Home } from './pages/Home';
+import { IntradayCockpit } from './pages/IntradayCockpit';
 import { Ledger } from './pages/Ledger';
 import { MiningLab } from './pages/MiningLab';
 import { PortfolioLab } from './pages/PortfolioLab';
@@ -38,6 +39,7 @@ const PAGES: Record<string, ReactElement> = {
   '/mining': <MiningLab />,
   '/desk': <TradingDesk />,
   '/gate': <GoLiveGate />,
+  '/intraday': <IntradayCockpit />,
   '/system': <System />,
   '/audit': <Audit />,
   '/glossary': <Glossary />,

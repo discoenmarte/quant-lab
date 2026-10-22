@@ -31,7 +31,8 @@ MILESTONES = [
     {"id": "M7a", "name": "Forward paper book", "status": "done"},
     {"id": "M7b", "name": "Broker paper trading", "status": "done"},
     {"id": "M8", "name": "Go-live gate", "status": "done"},
-    {"id": "M9", "name": "Intraday mode", "status": "planned"},
+    {"id": "M5b", "name": "Follow the informed (insiders)", "status": "done"},
+    {"id": "M9", "name": "Intraday mode", "status": "done"},
 ]
 
 

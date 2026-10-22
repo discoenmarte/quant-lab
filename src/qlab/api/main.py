@@ -21,6 +21,7 @@ from . import (
     routes_mining,
     routes_paper,
     routes_portfolio,
+    routes_radar,
     routes_registry,
     routes_report,
 )
@@ -28,7 +29,7 @@ from . import (
 ROUTERS = [routes_core.router, routes_data.router, routes_backtest.router, routes_gauntlet.router,
            routes_ledger.router, routes_portfolio.router, routes_paper.router, routes_registry.router,
            routes_report.router, routes_broker.router, routes_inbox.router, routes_mining.router,
-           routes_golive.router, routes_intraday.router]
+           routes_golive.router, routes_intraday.router, routes_radar.router]
 
 
 def create_app() -> FastAPI:

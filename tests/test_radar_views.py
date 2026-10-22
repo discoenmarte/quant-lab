@@ -75,3 +75,21 @@ def test_the_overview_reads_without_fetching_and_a_signal_view_has_its_threshold
     v = overview.signal_view("wiki/bank_run")
     assert v["points"][-1]["value"] == views[-1] and set(v["thresholds"]) == {"robust_z", "cusum", "bocpd"}
     assert v["thresholds"]["robust_z"]["severe"] > v["thresholds"]["robust_z"]["notable"]
+
+
+def test_the_api_serves_the_radar_and_refuses_unknown_passes_and_signals(isolated_lab):
+    """Reads answer before anything is collected; bad input is a clear 4xx."""
+    from fastapi.testclient import TestClient
+
+    from qlab.api.main import create_app
+
+    client = TestClient(create_app())
+    assert client.get("/api/radar").json()["scan"] is None
+    assert client.get("/api/radar/scenarios").status_code == 200
+    assert client.get("/api/radar/anomalies", params={"status": "all"}).json() == []
+    assert client.get("/api/radar/calibration").json() is None
+    assert client.get("/api/radar/signal", params={"key": "wiki/nothing"}).status_code == 404
+    assert client.post("/api/radar/collect", json={"kind": "hourly"}).status_code == 400
+    assert client.post("/api/radar/run", json={"kind": "quick", "only": ["metaculus"]}).status_code == 400
+    out = client.post("/api/radar/scan", json={}).json()
+    assert out["n_signals"] == 0 and "readings" not in out

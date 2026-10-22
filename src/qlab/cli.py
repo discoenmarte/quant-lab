@@ -1,6 +1,6 @@
 """Command line entry point: ``qlab serve | init | ingest | backtest | portfolio | gauntlet | portfolio-gauntlet |
 calibrate | calibrate-variance | calibrate-mining | bench | demo | paper | report | registry | alerts | broker | inbox |
-mine``.
+mine | radar``.
 """
 
 from __future__ import annotations
@@ -1533,3 +1533,184 @@ def calibrate_mining(
 
 if __name__ == "__main__":
     app()
+
+
+radar_app = typer.Typer(help="Pipeline D (M10): the radar: news, attention, crowd forecasts and market stress, watched "
+                             "for anomalies", no_args_is_help=True)
+app.add_typer(radar_app, name="radar")
+RADAR_API = "http://127.0.0.1:8765/api"
+
+
+def _radar_call(api: str, method: str, path: str, body: dict | None = None, timeout: float = 3600) -> dict | None:
+    """Call the Lab API's radar endpoints when the API is up.
+
+    Args:
+        api: Lab API address.
+        method: ``get`` or ``post``.
+        path: Path below ``/api``.
+        body: JSON body for a post.
+        timeout: Seconds to wait (a deep pass can take many minutes when GDELT is slow).
+
+    Returns:
+        The decoded answer, or None when the API is down (the caller runs in-process).
+    """
+    import httpx
+
+    from .paper.nightly import api_up
+
+    if not api_up(api):
+        return None
+    res = httpx.request(method.upper(), f"{api}{path}", json=body, timeout=timeout)
+    res.raise_for_status()
+    return res.json()
+
+
+def _print_collect(out: dict) -> None:
+    """Print a collection pass and exit 1 when every source failed.
+
+    Args:
+        out: Output of ``radar.collect.run``.
+
+    Raises:
+        typer.Exit: Every source failed.
+    """
+    if out.get("skipped"):
+        typer.echo("skipped: another radar pass is still running")
+        return
+    for s in out["sources"]:
+        typer.echo(f"  {'ok ' if s['ok'] else 'ERR'} {s['source']:<8} {s['message'][:200]}")
+    if out["sources"] and not any(s["ok"] for s in out["sources"]):
+        raise typer.Exit(1)
+
+
+def _print_scan(out: dict) -> None:
+    """Print a scan's summary.
+
+    Args:
+        out: Output of ``radar.scan.run``.
+    """
+    o = out["open"]
+    typer.echo(f"scan {out['run_id']}: {out['n_signals']} signals, {o['severe']} severe and {o['notable']} notable "
+               f"anomalies open; opened {len(out['opened'])}, closed {len(out['closed'])}")
+    for a in out["alerts"]:
+        typer.echo(f"  alert: {a}")
+    if out.get("paused"):
+        typer.echo("  new paper orders PAUSED by the radar (QLAB_RADAR_AUTOPAUSE)")
+
+
+@radar_app.command("collect")
+def radar_collect(deep: bool = typer.Option(False, "--deep", help="The daily pass: history, Wikipedia and GDELT"),
+                  only: str = typer.Option("", help="Comma-separated sources: wiki, gdelt, hn, markets, stress"),
+                  api: str = typer.Option(RADAR_API, help="Lab API; the pass runs there when it is up")) -> None:
+    """Collect from the radar's sources: the quick pass, or the deep daily one.
+
+    Args:
+        deep: Run the deep pass.
+        only: Limit to these sources.
+        api: Lab API address.
+    """
+    body = {"kind": "deep" if deep else "quick", "only": [s.strip() for s in only.split(",") if s.strip()]}
+    out = _radar_call(api, "post", "/radar/collect", body)
+    if out is None:
+        from .radar import collect
+
+        out = collect.run(body["kind"], body["only"] or None, log=typer.echo, actor="cli")
+    _print_collect(out)
+
+
+@radar_app.command("scan")
+def radar_scan(recalibrate: bool = typer.Option(False, help="Recalibrate every detector first"),
+               api: str = typer.Option(RADAR_API, help="Lab API; the scan runs there when it is up")) -> None:
+    """Run every detector on every signal, record anomalies and raise the radar's alerts.
+
+    Args:
+        recalibrate: Recalibrate thresholds before scanning.
+        api: Lab API address.
+    """
+    out = _radar_call(api, "post", "/radar/scan", {"recalibrate": recalibrate})
+    if out is None:
+        from .radar import scan
+
+        out = scan.run(recalibrate=recalibrate, log=typer.echo, actor="cli")
+    _print_scan(out)
+
+
+@radar_app.command("run")
+def radar_run(deep: bool = typer.Option(False, "--deep", help="The daily pass instead of the quick one"),
+              recalibrate: bool = typer.Option(False, help="Recalibrate every detector before scanning"),
+              api: str = typer.Option(RADAR_API, help="Lab API; the pass runs there when it is up")) -> None:
+    """Collect, then scan: what the server's qlab-radar timers run.
+
+    Args:
+        deep: Run the deep pass.
+        recalibrate: Recalibrate thresholds.
+        api: Lab API address.
+    """
+    body = {"kind": "deep" if deep else "quick", "only": [], "recalibrate": recalibrate}
+    out = _radar_call(api, "post", "/radar/run", body)
+    if out is None:
+        from .radar import collect, scan
+
+        out = {"collect": collect.run(body["kind"], log=typer.echo, actor="cli"),
+               "scan": scan.run(recalibrate=recalibrate, log=typer.echo, actor="cli")}
+    _print_scan(out["scan"])
+    _print_collect(out["collect"])
+
+
+@radar_app.command("show")
+def radar_show(api: str = typer.Option(RADAR_API, help="Lab API to read when it is up")) -> None:
+    """Print the open anomalies, the detectors' measured false-alarm rates and each source's status.
+
+    Args:
+        api: Lab API address.
+    """
+    o = _radar_call(api, "get", "/radar", timeout=120)
+    if o is None:
+        from .radar import overview
+
+        o = overview.overview()
+    s = o["scan"]
+    typer.echo("no scan yet" if s is None else
+               f"last scan {s['created_at']} UTC: {s['n_signals']} signals, {s['open']['severe']} severe and "
+               f"{s['open']['notable']} notable open; automatic pause {'ON' if o['autopause'] else 'off'}")
+    for a in o["anomalies"]:
+        typer.echo(f"  [{a['severity']:<7}] {a['label']} ({a['detector']}, since {str(a['started'])[:10]})")
+    cal = o.get("calibration")
+    if cal:
+        typer.echo(f"calibration {cal['calib_id']} ({cal['created_at']}): false alarms per month on null histories")
+        for d, v in cal["summary"].items():
+            if v.get("null_rate") is not None:
+                typer.echo(f"  {d:<9} {v['signals']:>3} signals: notable {v['null_rate']:.2f}, severe "
+                           f"{v['null_rate_severe']:.3f}; planted 3-sigma step caught {v['detect_rate']:.0%}")
+    for src in o["sources"]:
+        typer.echo(f"  source {src['source']:<8} {src.get('status') or '-':<6} {src.get('series', 0):>3} series, "
+                   f"newest published {str(src.get('last_published') or '-')[:16]}  {(src.get('message') or '')[:90]}")
+
+
+@radar_app.command("scenarios")
+def radar_scenarios(search: str = typer.Option("", help="Search open Polymarket events to add to the watchlist"),
+                    api: str = typer.Option(RADAR_API, help="Lab API to read when it is up")) -> None:
+    """Print the scenario board, or search Polymarket for new questions.
+
+    Args:
+        search: Words to search for (prints matching events instead of the board).
+        api: Lab API address.
+    """
+    from .radar import scenarios
+
+    if search:
+        for e in scenarios.search(search):
+            typer.echo(f"{e['slug']}  {e['title']}  (ends {e['end']}, volume {e['volume'] or 0:,.0f})")
+            for m in e["markets"][:6]:
+                p = "–" if m["prob"] is None else f"{m['prob']:.0%}"
+                typer.echo(f"    {p:>5}  {m['label']}")
+        return
+    b = _radar_call(api, "get", "/radar/scenarios", timeout=60) or scenarios.board()
+    typer.echo(b["note"])
+    for sc in b["scenarios"]:
+        typer.echo(f"\n{sc['title']} [{sc['source']}]" + (f"  base rate: {sc['base_rate']}" if sc["base_rate"] else ""))
+        for m in sc["markets"]:
+            ch = "" if m["change_7d"] is None else f"  ({m['change_7d'] * 100:+.0f} pts in 7 days)"
+            typer.echo(f"    {m['prob']:>5.0%}  {m['label']}{ch}")
+        if not sc["markets"]:
+            typer.echo("    (not collected yet)")

@@ -27,7 +27,6 @@ import httpx
 from . import audit, config, db
 from .timeutil import now_utc
 
-
 MIN_DISK_GB = 3.0  # three snapshots need about 2.5 GB; below this the next one may not fit
 MIN_MEM_GB = 0.3
 

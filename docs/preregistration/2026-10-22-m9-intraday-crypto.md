@@ -68,3 +68,35 @@ runs wait for a calibrated fix.
   `--strategy range_breakout` on both. Seed 7, run once each, in that order, after the calibration report exists.
 - No parameter, window or instrument is changed after seeing a result.
 - If any candidate passes stages 1-9, the lockbox decision is written down before it is opened.
+
+## Results (appended 2026-10-22, after the runs)
+
+**Calibration** (thresholds v5, report `343740d3`, seeds 600,001+, 440 runs, 6 minutes on 14 processes):
+
+- Noise passed 0 of 400 runs (95% CI 0-1.0%), for both rules and both researcher types. The condition for the real
+  runs was met.
+- Power on one-hour planted momentum was 0 of 40. Every run failed the plateau stage, because an effect that exists
+  at one setting looks like overfitting.
+- Planting it over the first and last four hours and measuring at that setting (reports `97659722` and `d291f58f`)
+  still gave 0% at true edges of 0.5, 1, 2 and 3, again all at plateau.
+- The reason is the cost cliff. A 28 bps round trip takes most of the gross gain, so a neighbouring setting that keeps
+  three quarters of the gross keeps well under half the net. The plateau stage asks neighbours for half the
+  candidate's edge.
+- **With these costs the gauntlet can't confirm an intraday edge, however strong.** The thresholds were not changed.
+
+**Verdicts** (seed 7, research data 2017-08-17 to 2024-09-30, lockboxes sealed):
+
+| Card | Question | Edge after costs (before) | Costs break even at | Permutation p | Verdict |
+|---|---|---|---|---|---|
+| `1d96192f4757` | `intraday_momentum:BTCUSDT:1h` | −5.45 (−0.61) | −2 bps | 0.99 | rejected at costs |
+| `73f9b8cc72a8` | `intraday_momentum:ETHUSDT:1h` | −3.91 (−0.15) | −1 bps | 0.86 | rejected at costs |
+| `20be29a793c1` | `range_breakout:BTCUSDT:1h` | −1.01 (+0.81) | 6 bps | 0.076 | rejected at costs |
+| `a87d2f7e3244` | `range_breakout:ETHUSDT:1h` | −0.20 (+1.24) | 12 bps | 0.004 | rejected at costs |
+
+As expected, all four were rejected.
+
+- **Intraday momentum** has no edge on crypto even before costs in this sample. Both coins went the wrong way.
+- **The ETH breakout** has a gross signal that noise rarely matches (p = 0.004), but costs of 14 bps a side exceed
+  its 12 bps break-even. It also fails walk-forward (−0.73 out of sample) and plateau (0 of 5 neighbours).
+- Lower costs (maker orders, fee discounts) could be tested only as a new, pre-registered question, with N counted.
+- The lockboxes of the four questions are still sealed.

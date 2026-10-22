@@ -86,6 +86,9 @@ BATCHES = {
 STUDY_METHODS = (*stats.VARIANCE_METHODS, "positive_gross")  # positive_gross is measured, not offered
 HOURLY_STRATEGIES = ["intraday_momentum", "range_breakout"]
 HOURLY_POWER = ["intraday_momentum"]  # planted intraday momentum
+# Power is measured at the setting that matches the planted structure (the first and last four hours); the one-hour
+# default can't pay its costs from a four-hour effect, and a one-hour effect fails the plateau stage by design.
+HOURLY_POWER_PARAMS = {"window": 4, "hold": 4, "vol_filter": 0}
 HOURLY_YEARS = 7.1  # the research length of Binance's hourly BTC and ETH bars (2017-08 to the lockbox)
 HOURLY_DPY = 365
 
@@ -237,7 +240,8 @@ def true_edge(family: str, trend: float, years: float = 400.0, seed: int = 12345
         from ..intraday.synthetic import synthetic_hourly
 
         hb = synthetic_hourly(min(years, 120.0), trend, seed)
-        res_h = run(hb, REGISTRY[family.split("/", 1)[1]].positions(hb), COST_PRESETS["crypto"], with_trades=False)
+        res_h = run(hb, REGISTRY[family.split("/", 1)[1]].positions(hb, HOURLY_POWER_PARAMS), COST_PRESETS["crypto"],
+                    with_trades=False)
         from .subjects import to_daily
 
         e, _ = metrics.edge(to_daily(res_h.returns.to_numpy(), hb["ts"]).to_numpy(),
@@ -321,7 +325,7 @@ def _one(task: dict[str, Any]) -> dict[str, Any]:
     """
     th = task["th"]
     subject = make_subject(task)
-    params = subject.strat.defaults()
+    params = {**subject.strat.defaults(), **(task.get("params") or {})}
     selection: list[float] = []
     gross: list[float] = []
     counted = False
@@ -628,7 +632,8 @@ def run_calibration(
                 for _ in range(hourly_power_reps):
                     seed += 1
                     tasks.append({"scenario": "power", "family": fam, "years": HOURLY_YEARS, "trend": h_sizes[target],
-                                  "target": target, "true_edge": truth[(fam, target)], "seed": seed, "th": th})
+                                  "target": target, "true_edge": truth[(fam, target)], "seed": seed, "th": th,
+                                  "params": HOURLY_POWER_PARAMS})
 
     runs: list[dict[str, Any]] = []
     n_workers = workers or max(1, (os.cpu_count() or 2) - 1)

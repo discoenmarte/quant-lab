@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -107,8 +107,8 @@ def test_wikipedia_views_are_stamped_published_a_day_after_their_day_or_at_the_f
     assert df["views"].iloc[-1] == 121
 
 
-def test_gdelt_timelines_become_daily_share_and_weighted_tone_and_stop_after_refusals():
-    """Hourly periods sum into days; tone is weighted by articles; repeated refusals end the pass early."""
+def test_gdelt_timelines_become_daily_share_and_weighted_tone_within_a_request_budget():
+    """Hourly periods sum into days; tone is weighted by articles; refusals end a pass; work is spread over passes."""
     def timeline(mode: str) -> dict:
         pts = [("20261020T100000Z", 10, 1000, -2.0), ("20261020T110000Z", 30, 1000, -6.0),
                ("20261022T090000Z", 5, 500, 1.0)]
@@ -117,32 +117,40 @@ def test_gdelt_timelines_become_daily_share_and_weighted_tone_and_stop_after_ref
                                   "data": [{"date": d, "value": v, "norm": n} for d, v, n, _ in pts]}]}
         return {"timeline": [{"series": "Average Tone", "data": [{"date": d, "value": t} for d, _, _, t in pts]}]}
 
-    calls = {"n": 0}
+    calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         q = parse_qs(urlsplit(str(request.url)).query)
-        calls["n"] += 1
+        calls.append(q["query"][0])
         if "nvidia" in q["query"][0]:
             return httpx.Response(429, text="Please limit requests")
         if q["mode"][0] == "artlist":
             return httpx.Response(200, json={"articles": [
-                {"url": "https://x.example/1", "title": "Stocks plunge‮ on AI fears", "seendate": "20261022T080000Z",
-                 "domain": "x.example", "language": "English"}]})
+                {"url": "https://x.example/1", "title": "Stocks plunge\u202e on AI fears",
+                 "seendate": "20261022T080000Z", "domain": "x.example", "language": "English"}]})
         return httpx.Response(200, json=timeline(q["mode"][0]))
 
     items = [{"id": "ai", "query": '"artificial intelligence"', "category": "ai"},
              {"id": "nvidia", "query": "nvidia", "category": "ai"},
              {"id": "nvidia2", "query": "nvidia", "category": "ai"},
              {"id": "never_asked", "query": "recession", "category": "macro"}]
-    assert gdelt.collect(items, fetcher(handler), NOW, deep=False)["series"] == 0  # quick pass skips GDELT
     out = gdelt.collect(items, fetcher(handler), NOW, deep=True)
-    assert out["series"] == 1 and any("not asked" in e for e in out["errors"])
+    assert out["series"] == 1 and "3 of 4 queries still due" in out["message"]
+    assert not any("recession" in c for c in calls)  # two refusals in a row ended the pass
     df = store.read("gdelt", "ai")
     d20 = df[df["ts"] == pd.Timestamp("2026-10-20", tz="UTC")].iloc[0]
     assert d20["articles"] == 40 and d20["share"] == pytest.approx(200.0) and d20["tone"] == pytest.approx(-5.0)
     assert bool(df["partial"].iloc[-1]) and df["published_at"].iloc[-1] == pd.Timestamp(NOW)
+
+    calls.clear()
+    out = gdelt.collect(items[:1], fetcher(handler), NOW + timedelta(hours=1), deep=False)
+    assert out["series"] == 0 and len(calls) == 1  # timelines not due again; headlines are, once a day
     heads = store.headlines()
-    assert len(heads) == 1 and "‮" not in heads[0]["title"] and heads[0]["score"] < 0
+    assert len(heads) == 1 and "\u202e" not in heads[0]["title"] and heads[0]["score"] < 0
+
+    calls.clear()
+    out = gdelt.collect(items, fetcher(handler), NOW + timedelta(hours=2), deep=False)
+    assert len(calls) == 2 and "recession" in calls[0]  # the query never tried goes first; two requests end the pass
 
 
 def test_hacker_news_counts_stories_per_day_and_keeps_recent_titles():

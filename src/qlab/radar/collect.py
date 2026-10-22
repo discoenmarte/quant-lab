@@ -1,9 +1,10 @@
 """One collection pass over the radar's sources: the quick pass every 15 minutes, the deep pass once a day.
 
-- **Quick** (``quick``): prediction-market snapshots, Hacker News for the last days, and the stress files when their
-  cached copy is older than six hours. Cheap and polite enough to run every 15 minutes.
-- **Deep** (``deep``): everything, with history: Wikipedia views, GDELT timelines and headlines (GDELT is too strict
-  for the quick pass), Hacker News for the last week, market history, the stress files fresh.
+- **Quick** (``quick``): prediction-market snapshots, Hacker News for the last days, the stress files when their
+  cached copy is older than six hours, and at most two GDELT requests (GDELT's work is spread over the day). Cheap
+  and polite enough to run every 15 minutes.
+- **Deep** (``deep``): everything, with history: Wikipedia views, a larger GDELT budget, Hacker News for the last
+  week, market history, the stress files fresh.
 - **One pass at a time.** Passes run inside the Lab API on the server (DuckDB has one writer), and a quick pass that
   starts while the deep pass is still running is skipped rather than queued.
 """
@@ -28,7 +29,7 @@ COLLECTORS: dict[str, tuple[Callable[..., dict[str, Any]], str]] = {
     "markets": (markets.collect, "scenarios"),
     "stress": (stress.collect, "stress"),
 }
-QUICK = ("markets", "hn", "stress")
+QUICK = ("markets", "hn", "stress", "gdelt")
 DEEP = ("stress", "markets", "hn", "wiki", "gdelt")
 _lock = threading.Lock()
 

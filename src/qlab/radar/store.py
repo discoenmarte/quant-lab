@@ -301,7 +301,8 @@ class Fetcher:
         self._last[host] = self.clock()
 
     def get(self, url: str, params: dict[str, Any] | None = None, *, cache: Path | None = None,
-            ttl: float | None = None, allow_404: bool = False, headers: dict[str, str] | None = None) -> bytes | None:
+            ttl: float | None = None, allow_404: bool = False, headers: dict[str, str] | None = None,
+            retries: int | None = None) -> bytes | None:
         """Download a URL, or return the cached copy while it is fresh.
 
         Args:
@@ -311,6 +312,7 @@ class Fetcher:
             ttl: Seconds a cached body stays fresh; None keeps it forever (finished history).
             allow_404: Return None on 404 instead of raising.
             headers: Extra request headers.
+            retries: Retries after a rate limit or server error; None uses the host's backoff list.
 
         Returns:
             The body, or None for an allowed 404.
@@ -324,6 +326,8 @@ class Fetcher:
                 return cache.read_bytes()
         host = urlsplit(url).hostname or ""
         waits = BACKOFF.get(host, DEFAULT_BACKOFF)
+        if retries is not None:
+            waits = waits[:retries]
         last = ""
         for attempt in range(len(waits) + 1):
             self._wait_turn(host)

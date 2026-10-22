@@ -1722,3 +1722,21 @@ def radar_scenarios(search: str = typer.Option("", help="Search open Polymarket 
             typer.echo(f"    {m['prob']:>5.0%}  {m['label']}{ch}")
         if not sc["markets"]:
             typer.echo("    (not collected yet)")
+
+
+@radar_app.command("har")
+def radar_har() -> None:
+    """Run the pre-registered HAR tests: does attention (or news tone) add to a model of next-day volatility?
+
+    Research data only (before the lockbox). A regression, not a backtest, so it adds no trial; it is logged in the
+    audit log and its specification is fixed in docs/preregistration/2026-10-22-m10-radar-attention.md.
+    """
+    from .radar import research
+
+    for r in research.har_preregistered(actor="cli"):
+        if "error" in r:
+            typer.echo(f"{r['rule']:<24} {r['symbol']:<8} missing data: {r['error']}")
+            continue
+        typer.echo(f"{r['rule']:<24} {r['symbol']:<8} {r['start']}..{r['end']}  n {r['n']:,}  coef {r['coef']:+.4f} "
+                   f"(t {r['t']:+.2f}, one-sided p {r['p_one_sided']:.4f}, expected {r['expect']})  "
+                   f"R2 {r['r2_har']:.3f} -> {r['r2_with']:.3f}")

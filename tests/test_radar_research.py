@@ -137,3 +137,19 @@ def test_har_test_finds_a_signal_that_precedes_volatility_and_not_one_that_doesn
         assert out["coef"] > 0 and out["p_one_sided"] < 0.01
     else:
         assert out["p_one_sided"] > 0.01
+
+
+def test_the_preregistered_har_tests_say_which_data_is_missing_and_stop_at_the_lockbox():
+    """Without data each test reports what's missing; with data the sample ends before the lockbox."""
+    out = research.har_preregistered()
+    assert [r["rule"] for r in out] == ["attention_derisk", "crypto_attention_derisk", "tone_derisk"]
+    assert all("error" in r for r in out)
+    from qlab.data import store as lake
+
+    bars = research.synthetic_signal_bars(12, 0.0, 9).drop(columns="signal")
+    bars["ts"] = pd.bdate_range("2015-01-01", periods=len(bars), tz="UTC")
+    lake.write_series("yahoo", "SPY", "1d", bars)
+    for a in research.ATTENTION["attention_derisk"]:
+        put_views(a, 1000 * np.exp(np.random.default_rng(10).normal(0, 0.2, 3500)), start="2015-07-01")
+    spy = research.har_preregistered()[0]
+    assert "error" not in spy and spy["start"] >= "2015-11-01" and spy["end"] < "2024-10-01"

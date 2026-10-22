@@ -393,3 +393,40 @@ def har_test(bars: pd.DataFrame, z: np.ndarray, start: str, end: str, expect: st
     return {"n": int(len(df)), "coef": float(b[-1]), "se": float(s[-1]), "t": t, "p_one_sided": p,
             "r2_har": r2_0, "r2_with": r2, "start": str(df.index[0].date()) if len(df) else start,
             "end": str(df.index[-1].date()) if len(df) else end}
+
+
+# The pre-registered HAR tests: (rule whose signal is tested, data source, instrument, expected sign).
+HAR_TESTS = (("attention_derisk", "yahoo", "SPY", "positive"),
+             ("crypto_attention_derisk", "binance", "BTCUSDT", "positive"),
+             ("tone_derisk", "yahoo", "SPY", "negative"))
+HAR_WINDOW = 90
+
+
+def har_preregistered(actor: str = "cli") -> list[dict[str, Any]]:
+    """Run the pre-registered HAR tests once each, on research data only (before the lockbox), and log them.
+
+    Args:
+        actor: Who ran them, for the audit log.
+
+    Returns:
+        One row per test: ``rule, symbol, expect`` and ``har_test``'s output, or ``error`` when its data is missing.
+    """
+    from .. import audit, lockbox
+    from ..backtest.runner import load_bars
+    from ..backtest.strategies import REGISTRY
+
+    end = str(lockbox.sealed_from().date())
+    out = []
+    for rule, source, symbol, expect in HAR_TESTS:
+        row: dict[str, Any] = {"rule": rule, "symbol": symbol, "expect": expect}
+        try:
+            bars = load_bars(source, symbol, "1d")
+            dec = _decisions(bars)
+            z = (tone_z(HAR_WINDOW, dec) if rule == "tone_derisk"
+                 else attention_z(ATTENTION[rule], HAR_WINDOW, dec))
+            row.update(har_test(bars, z, REGISTRY[rule].starts, end, expect))
+        except FileNotFoundError as err:
+            row["error"] = str(err)
+        out.append(row)
+    audit.log("radar.har", target="preregistered", actor=actor, details=out)
+    return out

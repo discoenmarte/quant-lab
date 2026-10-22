@@ -19,6 +19,7 @@ Design (decision 0010):
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -166,8 +167,15 @@ class OllamaProvider:
                       tokens_in=int(out.get("prompt_eval_count") or 0), tokens_out=int(out.get("eval_count") or 0))
 
 
+CLI_CREDENTIALS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+
+
 class ClaudeCLIProvider:
-    """The Claude CLI in headless mode (``claude -p ... --output-format json``), billed to the owner's plan."""
+    """The Claude CLI in headless mode (``claude -p ... --output-format json``), billed to the owner's plan.
+
+    On a server the CLI signs in with ``CLAUDE_CODE_OAUTH_TOKEN`` (from ``claude setup-token``, the owner's plan) or
+    ``ANTHROPIC_API_KEY`` (billed per token); either may sit in ``lab.env`` and is handed to the CLI's environment.
+    """
 
     name = "claude"
 
@@ -211,8 +219,13 @@ class ClaudeCLIProvider:
         if self._model_arg:
             args += ["--model", self._model_arg]
         started = time.perf_counter()
+        env = dict(os.environ)
+        for key in CLI_CREDENTIALS:  # a server keeps them in lab.env, which the CLI itself doesn't read
+            value = config.setting(key)
+            if value and key not in env:
+                env[key] = value
         try:
-            run = subprocess.run(args, capture_output=True, text=True, timeout=self._timeout, check=False)
+            run = subprocess.run(args, capture_output=True, text=True, timeout=self._timeout, check=False, env=env)
         except (OSError, subprocess.TimeoutExpired) as err:
             raise LLMError(f"the Claude CLI failed ({type(err).__name__})") from None
         try:

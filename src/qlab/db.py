@@ -350,6 +350,83 @@ SCHEMA.append(
         actor VARCHAR
     )""")
 
+SCHEMA += [
+    # M10: the radar (decision 0016). Series are Parquet files with a catalog row; sources keep their last outcome;
+    # headlines are untrusted text stored as data; anomalies are detector episodes (open while the detector stays above
+    # its threshold); calibrations hold each detector's thresholds and measured false-alarm rates; runs log each pass.
+    """CREATE TABLE IF NOT EXISTS radar_series (
+        key VARCHAR PRIMARY KEY,
+        source VARCHAR,
+        name VARCHAR,
+        label VARCHAR,
+        category VARCHAR,
+        unit VARCHAR,
+        frequency VARCHAR,
+        first_ts TIMESTAMP,
+        last_ts TIMESTAMP,
+        n_rows BIGINT,
+        last_published TIMESTAMP,
+        updated_at TIMESTAMP,
+        path VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS radar_sources (
+        source VARCHAR PRIMARY KEY,
+        last_attempt TIMESTAMP,
+        last_success TIMESTAMP,
+        status VARCHAR,
+        message VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS radar_headlines (
+        source VARCHAR,
+        item_id VARCHAR,
+        topic VARCHAR,
+        title VARCHAR,
+        url VARCHAR,
+        domain VARCHAR,
+        language VARCHAR,
+        published_at TIMESTAMP,
+        fetched_at TIMESTAMP,
+        points INTEGER,
+        pos INTEGER,
+        neg INTEGER,
+        score DOUBLE,
+        PRIMARY KEY (source, item_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS radar_anomalies (
+        anomaly_id VARCHAR PRIMARY KEY,
+        signal VARCHAR,
+        detector VARCHAR,
+        category VARCHAR,
+        started TIMESTAMP,
+        ts TIMESTAMP,
+        value DOUBLE,
+        score DOUBLE,
+        threshold DOUBLE,
+        severity VARCHAR,
+        direction VARCHAR,
+        status VARCHAR,
+        first_seen TIMESTAMP,
+        last_seen TIMESTAMP,
+        alerted_at TIMESTAMP,
+        message VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS radar_calibrations (
+        calib_id VARCHAR PRIMARY KEY,
+        created_at TIMESTAMP,
+        budget VARCHAR,
+        summary VARCHAR,
+        path VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS radar_runs (
+        run_id VARCHAR PRIMARY KEY,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        kind VARCHAR,
+        ok BOOLEAN,
+        summary VARCHAR
+    )""",
+]
+
 MIGRATIONS = [
     # M1: series carry their kind (bars or factors) and a content hash.
     "ALTER TABLE series ADD COLUMN IF NOT EXISTS kind VARCHAR",

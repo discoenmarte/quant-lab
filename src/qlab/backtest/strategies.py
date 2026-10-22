@@ -268,6 +268,64 @@ def _range_breakout(bars: pd.DataFrame, window: int = 4, vol_filter: int = 0) ->
     return range_breakout(bars, window, vol_filter)
 
 
+def _attention_derisk(bars: pd.DataFrame, window: int = 90, threshold: float = 2.5, hold: int = 5) -> pd.Series:
+    """Market-attention de-risk (``qlab.radar.research.attention_rule``), imported when first used.
+
+    Args:
+        bars: Normalised daily bars.
+        window: Baseline days.
+        threshold: Spike level, robust standard deviations.
+        hold: Days out after a spike.
+
+    Returns:
+        Target positions.
+    """
+    from ..radar.research import attention_rule
+
+    return attention_rule("attention_derisk", bars, window, threshold, hold)
+
+
+def _crypto_attention_derisk(bars: pd.DataFrame, window: int = 90, threshold: float = 2.5,
+                             hold: int = 5) -> pd.Series:
+    """Crypto-attention de-risk (``qlab.radar.research.attention_rule``), imported when first used.
+
+    Args:
+        bars: Normalised daily bars.
+        window: Baseline days.
+        threshold: Spike level, robust standard deviations.
+        hold: Days out after a spike.
+
+    Returns:
+        Target positions.
+    """
+    from ..radar.research import attention_rule
+
+    return attention_rule("crypto_attention_derisk", bars, window, threshold, hold)
+
+
+def _tone_derisk(bars: pd.DataFrame, window: int = 90, threshold: float = 2.5, hold: int = 5) -> pd.Series:
+    """News-tone de-risk (``qlab.radar.research.tone_rule``), imported when first used.
+
+    Args:
+        bars: Normalised daily bars.
+        window: Baseline days.
+        threshold: Drop level, robust standard deviations.
+        hold: Days out after a drop.
+
+    Returns:
+        Target positions.
+    """
+    from ..radar.research import tone_rule
+
+    return tone_rule(bars, window, threshold, hold)
+
+
+_DERISK_PARAMS = {
+    "window": Param(90, 60, 120, 30, "Baseline of the robust z-score, days"),
+    "threshold": Param(2.5, 2.0, 3.5, 0.5, "Spike level, robust standard deviations"),
+    "hold": Param(5, 1, 9, 2, "Days out of the market after a spike"),
+}
+
 REGISTRY: dict[str, Strategy] = {
     s.name: s
     for s in [
@@ -354,6 +412,30 @@ REGISTRY: dict[str, Strategy] = {
                 "vol_filter": Param(0, 0, 1, 1, "1 = only after a day more volatile than usual"),
             },
             "Opening-range breakout (Crabel, 1990; Zarattini & Aziz, 2023)",
+        ),
+        Strategy(
+            "attention_derisk", "attention_derisk",
+            "Hold the index, and step out for a few days after market attention spikes: Wikipedia views of S&P 500, "
+            "Stock market crash and Recession far above their usual level, as published. The radar (M10).",
+            _attention_derisk, dict(_DERISK_PARAMS),
+            "Da, Engelberg & Gao (2011); Moat et al. (2013); Dimpfl & Jank (2016)",
+            starts="2015-11-01",
+        ),
+        Strategy(
+            "crypto_attention_derisk", "crypto_attention_derisk",
+            "Hold the coin, and step out for a few days after crypto attention spikes: Wikipedia views of Bitcoin and "
+            "Cryptocurrency far above their usual level, as published. The radar (M10).",
+            _crypto_attention_derisk, dict(_DERISK_PARAMS),
+            "Kristoufek (2013); Urquhart (2018); Da, Engelberg & Gao (2011)",
+            starts="2015-11-01",
+        ),
+        Strategy(
+            "tone_derisk", "tone_derisk",
+            "Hold the index, and step out for a few days after the tone of stock-market news (GDELT, English sources) "
+            "drops far below its usual level, as published. The radar (M10).",
+            _tone_derisk, dict(_DERISK_PARAMS),
+            "Tetlock (2007); Garcia (2013); Antweiler & Frank (2004)",
+            starts="2017-06-01",
         ),
     ]
 }

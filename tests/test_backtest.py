@@ -71,7 +71,8 @@ def test_every_registered_strategy_is_free_of_look_ahead(name, monkeypatch):
     """Changing the future never changes past positions, for every strategy in the library, on the bars it trades.
 
     Intraday rules get hourly bars; the insider rule gets a synthetic insider series (its own alignment is tested
-    in test_informed).
+    in test_informed); the radar's rules get a synthetic signal column (their publication lags are tested in
+    test_radar_research).
     """
     bars = random_walk(800)
     if name in ("intraday_momentum", "range_breakout"):
@@ -86,6 +87,8 @@ def test_every_registered_strategy_is_free_of_look_ahead(name, monkeypatch):
         series = pd.DataFrame({"buy_filings": rng.poisson(20, len(days)).astype(float),
                                "sell_filings": rng.poisson(60, len(days)).astype(float)}, index=days)
         monkeypatch.setattr(insiders, "series", lambda: series)
+    if name in ("attention_derisk", "crypto_attention_derisk", "tone_derisk"):
+        bars = bars.assign(signal=np.random.default_rng(3).standard_t(4, len(bars)))
     assert future_shift_check(REGISTRY[name], bars)["passed"]
 
 

@@ -29,6 +29,12 @@ Intraday rules (M9, decision 0015) are calibrated on synthetic hourly crypto mar
 profile (``intraday.synthetic``), judged with crypto costs and 365 days a year. Their families are named
 ``hourly/<strategy>``; power is measured on planted intraday momentum for the momentum rule.
 
+The radar's de-risk rules (M10, decision 0016) are calibrated on synthetic daily markets that carry a signal
+column (``radar.research.synthetic_signal_bars``): attention for ``signal/attention_derisk``, news tone for
+``signal/tone_derisk``. In noise markets the signal is unrelated to everything; power is measured where each signal
+spike is followed by five days of higher volatility. A volatility-only effect caps a de-risk rule's edge at a
+fraction of the market's own Sharpe, so power is measured at the edges such an effect can reach.
+
 Every run uses the production code path (``pipeline.evaluate``) and thresholds, and its grid is recorded in
 the ledger under ``calib:`` questions, so even calibration counts its trials. Runs are independent, so they go
 to a process pool; nothing in a worker touches the database.
@@ -91,6 +97,11 @@ HOURLY_POWER = ["intraday_momentum"]  # planted intraday momentum
 HOURLY_POWER_PARAMS = {"window": 4, "hold": 4, "vol_filter": 0}
 HOURLY_YEARS = 7.1  # the research length of Binance's hourly BTC and ETH bars (2017-08 to the lockbox)
 HOURLY_DPY = 365
+# The radar's de-risk rules: which way their signal spikes, and the research length each one's data allows (the
+# strategy's ``starts`` to the lockbox).
+SIGNAL_SIDES = {"attention_derisk": "up", "tone_derisk": "down"}
+SIGNAL_YEARS = {"attention_derisk": 8.9, "tone_derisk": 7.3}
+SIGNAL_EDGES = (0.1, 0.2)  # a volatility-only effect can't give a de-risk rule much more than 0.23 (decision 0016)
 
 
 def _xs_parts(family: str) -> tuple[int, str]:
@@ -236,6 +247,12 @@ def true_edge(family: str, trend: float, years: float = 400.0, seed: int = 12345
     Returns:
         Annual edge Sharpe after ETF costs (crypto costs for cross-sectional families).
     """
+    if family.startswith("signal/"):
+        key = family.split("/", 1)[1]
+        sb = _signal_bars(min(years, 200.0), trend, seed, key)
+        res_s = run(sb, _unstarted(key).positions(sb), COST_PRESETS["etf"], with_trades=False)
+        e, _ = metrics.edge(res_s.returns.to_numpy(), res_s.benchmark.to_numpy())
+        return float(metrics.sharpe(e, None, DPY))
     if family.startswith("hourly/"):
         from ..intraday.synthetic import synthetic_hourly
 
@@ -259,6 +276,37 @@ def true_edge(family: str, trend: float, years: float = 400.0, seed: int = 12345
     res = run(bars, strat.positions(bars), COST_PRESETS["etf"], with_trades=False)
     e, _ = metrics.edge(res.returns.to_numpy(), res.benchmark.to_numpy())
     return float(metrics.sharpe(e, None, DPY))
+
+
+def _signal_bars(years: float, planted: float, seed: int, key: str) -> pd.DataFrame:
+    """A synthetic signal market for one of the radar's rules.
+
+    Args:
+        years: Length in years.
+        planted: Burst size after each spike (0 for noise).
+        seed: Random seed.
+        key: Strategy key (sets the signal's side).
+
+    Returns:
+        Bars with a ``signal`` column.
+    """
+    from ..radar.research import synthetic_signal_bars  # the radar builds on the gauntlet: one-way layers
+
+    return synthetic_signal_bars(years, planted, seed, SIGNAL_SIDES[key])
+
+
+def _unstarted(key: str) -> Any:
+    """A registered strategy without its ``starts`` date, for synthetic markets that begin in 1990.
+
+    Args:
+        key: Strategy key.
+
+    Returns:
+        A copy of the strategy judged from its first bar.
+    """
+    import dataclasses
+
+    return dataclasses.replace(REGISTRY[key], starts="")
 
 
 def trend_sizes(family: str, edges: tuple[float, ...], steps: int) -> dict[float, float]:
@@ -293,6 +341,11 @@ def make_subject(task: dict[str, Any]) -> BarSubject | PanelSubject:
         A ``BarSubject`` on synthetic bars, a ``PanelSubject`` on a synthetic eight-asset panel for a portfolio
         family, or one on a synthetic crypto cross-section for a cross-sectional family.
     """
+    if task["family"].startswith("signal/"):
+        key = task["family"].split("/", 1)[1]
+        sb = _signal_bars(task["years"], task["trend"], task["seed"], key)
+        return BarSubject(sb, _unstarted(key), sb["ts"].iloc[-1] + pd.Timedelta(days=1), source="synthetic",
+                          symbol="SYNTH", interval="1d", model=COST_PRESETS["etf"], rf=None, dpy=DPY)
     if task["family"].startswith("hourly/"):
         from ..intraday.synthetic import synthetic_hourly  # intraday builds on the gauntlet: one-way layers
 
@@ -538,6 +591,8 @@ def run_calibration(
     xs_power_reps: int = 15,
     hourly_reps: int = 0,
     hourly_power_reps: int = 20,
+    signal_reps: int = 0,
+    signal_power_reps: int = 0,
 ) -> dict[str, Any]:
     """Run the calibration study and save its report.
 
@@ -560,6 +615,8 @@ def run_calibration(
         xs_power_reps: Planted-edge runs per cross-sectional power family, edge size and history length.
         hourly_reps: Noise runs per intraday family and researcher type on hourly markets (0 skips them).
         hourly_power_reps: Planted-momentum runs per edge size for the intraday momentum rule.
+        signal_reps: Noise runs per radar de-risk family and researcher type (0 skips them).
+        signal_power_reps: Planted-burst runs per edge size and radar family, at ``SIGNAL_EDGES`` (0 skips them).
 
     Returns:
         The report: ``id``, ``created_at``, ``thresholds_version``, ``settings``, ``noise``, ``power``,
@@ -635,6 +692,26 @@ def run_calibration(
                                   "target": target, "true_edge": truth[(fam, target)], "seed": seed, "th": th,
                                   "params": HOURLY_POWER_PARAMS})
 
+    s_sizes: dict[str, dict[float, float]] = {}
+    if signal_reps or signal_power_reps:
+        for key in SIGNAL_SIDES:
+            fam = f"signal/{key}"
+            if signal_power_reps:
+                s_sizes[fam] = trend_sizes(fam, SIGNAL_EDGES, 8)
+                truth.update({(fam, t): true_edge(fam, s_sizes[fam][t]) for t in SIGNAL_EDGES})
+            for scenario in ("noise_fixed", "noise_tuned"):
+                for _ in range(signal_reps):
+                    seed += 1
+                    tasks.append({"scenario": scenario, "family": fam, "years": SIGNAL_YEARS[key], "trend": 0.0,
+                                  "seed": seed, "th": th})
+            for target in SIGNAL_EDGES if signal_power_reps else ():
+                for _ in range(signal_power_reps):
+                    seed += 1
+                    tasks.append({"scenario": "power", "family": fam, "years": SIGNAL_YEARS[key],
+                                  "trend": s_sizes[fam][target], "target": target,
+                                  "true_edge": truth[(fam, target)], "seed": seed, "th": th})
+        log(f"radar planted bursts {s_sizes}")
+
     runs: list[dict[str, Any]] = []
     n_workers = workers or max(1, (os.cpu_count() or 2) - 1)
     x_sizes: dict[str, dict[float, float]] = {}
@@ -690,6 +767,8 @@ def run_calibration(
                      "xs_reps": xs_reps, "xs_power_reps": xs_power_reps,
                      "hourly_reps": hourly_reps, "hourly_power_reps": hourly_power_reps,
                      "hourly_planted_momentum": {str(k): v for k, v in h_sizes.items()},
+                     "signal_reps": signal_reps, "signal_power_reps": signal_power_reps,
+                     "signal_planted_bursts": {f: {str(k): v for k, v in d.items()} for f, d in s_sizes.items()},
                      "xs_planted_sizes": {f: {str(k): v for k, v in d.items()} for f, d in x_sizes.items()},
                      "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed,
                      "code": code},
@@ -950,6 +1029,9 @@ def headline(report: dict[str, Any]) -> str:
         text += f" Portfolio trend (8 assets) — {curve('portfolio/tsmom')}."
     if any(p["family"].startswith("hourly/") for p in report["power"]):
         text += f" Intraday momentum (hourly) — {curve('hourly/intraday_momentum')}."
+    for fam in ("signal/attention_derisk", "signal/tone_derisk"):
+        if any(p["family"] == fam for p in report["power"]):
+            text += f" Radar {fam.split('/')[1]} (planted volatility bursts) — {curve(fam)}."
     if any(p["family"].startswith("xs") for p in report["power"]):
         text += (f" Crypto momentum (top 30) — {curve('xs30/xs_weekly_momentum')}."
                  f" Crypto size (top 30) — {curve('xs30/xs_small_size')}.")

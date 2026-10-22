@@ -50,6 +50,8 @@ class Strategy:
         fn: The position function.
         params: Tunable parameters by name.
         reference: Paper or source the rule comes from.
+        starts: First date the rule can be judged from (empty: from the first bar). The gauntlet leaves out earlier
+            bars, so years without its inputs don't count as years in cash.
     """
 
     name: str
@@ -58,6 +60,7 @@ class Strategy:
     fn: Callable[..., pd.Series]
     params: dict[str, Param] = field(default_factory=dict)
     reference: str = ""
+    starts: str = ""  # first date it can be judged from, when its inputs begin later than prices (YYYY-MM-DD)
 
     def defaults(self) -> dict[str, float]:
         """Default parameter values.
@@ -215,6 +218,23 @@ def rsi_reversion(bars: pd.DataFrame, period: int = 2, buy_below: float = 10, se
     return _hysteresis((r < buy_below).fillna(False), (r > sell_above).fillna(False))
 
 
+def _insider_timing(bars: pd.DataFrame, window: int = 60, lookback: int = 730, threshold: float = 0.0) -> pd.Series:
+    """Aggregate insider timing (``qlab.informed.insiders.insider_timing``), imported when first used.
+
+    Args:
+        bars: Normalised daily bars.
+        window: Days of filings per reading.
+        lookback: Days of history to standardise against.
+        threshold: Hold above this many standard deviations.
+
+    Returns:
+        Target positions.
+    """
+    from ..informed.insiders import insider_timing
+
+    return insider_timing(bars, window, lookback, threshold)
+
+
 REGISTRY: dict[str, Strategy] = {
     s.name: s
     for s in [
@@ -265,6 +285,19 @@ REGISTRY: dict[str, Strategy] = {
                 "sell_above": Param(70, 50, 90, 5, "Exit level"),
             },
             "Connors-style RSI(2)",
+        ),
+        Strategy(
+            "insider_timing", "insider_timing",
+            "Hold the index while corporate insiders across the market buy more than usual (their net purchase ratio "
+            "in SEC Form 4 filings, standardised against its own past); cash otherwise. Pipeline C (M5b).",
+            _insider_timing,
+            {
+                "window": Param(60, 30, 120, 30, "Days of filings per reading"),
+                "lookback": Param(730, 365, 1095, 365, "Days of history to standardise against"),
+                "threshold": Param(0.0, -1.0, 1.0, 0.5, "Hold above this many standard deviations"),
+            },
+            "Seyhun (1988); Lakonishok & Lee (2001); Jiang & Zaman (2010)",
+            starts="2009-01-02",
         ),
     ]
 }

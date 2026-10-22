@@ -683,6 +683,47 @@ def alerts_test() -> None:
         typer.echo(f"  {name:<9} {result}")
 
 
+informed_app = typer.Typer(help="Pipeline C (M5b): signals from corporate insiders, from the SEC's Form 4 data sets",
+                           no_args_is_help=True)
+app.add_typer(informed_app, name="informed")
+
+
+@informed_app.command("ingest")
+def informed_ingest() -> None:
+    """Download the SEC's quarterly insider data sets not cached yet and store the daily insider series.
+
+    Needs QLAB_SEC_USER_AGENT with a contact address (the SEC's rule for automated clients). The first run downloads
+    about 80 quarterly files; later runs fetch only new quarters.
+    """
+    from .informed import insiders
+
+    out = insiders.build(log=typer.echo, actor="cli")
+    typer.echo(f"sec/INSIDERS/1d: {out['n_rows']} filing days from {str(out['first_ts'])[:10]} to "
+               f"{str(out['last_ts'])[:10]}, {out['quarters']} quarters"
+               + (f"; not published yet: {', '.join(out['missing'])}" if out["missing"] else ""))
+
+
+@informed_app.command("show")
+def informed_show(window: int = typer.Option(60, help="Days of filings per reading"),
+                  lookback: int = typer.Option(730, help="Days to standardise against")) -> None:
+    """Print insider sentiment at each year's end and today (no backtest, so no trial).
+
+    Args:
+        window: Days of filings per reading.
+        lookback: Days of history to standardise against.
+    """
+    from .informed import insiders
+
+    s = insiders.series()
+    z = insiders.sentiment(window, lookback).dropna()
+    yearly = z.groupby(z.index.year).last()
+    totals = s.groupby(s.index.year)[["buy_filings", "sell_filings"]].sum()
+    for y, v in yearly.items():
+        b, sl = totals.loc[y]
+        typer.echo(f"  {y}: {int(b):>6} purchases, {int(sl):>7} sales; reading at year end {v:+.2f}")
+    typer.echo(f"latest reading {z.index[-1].date()}: {z.iloc[-1]:+.2f} standard deviations")
+
+
 golive_app = typer.Typer(help="Go-live gate (M8): the evidence checklist before any real money, and your plan",
                          no_args_is_help=False, invoke_without_command=True)
 app.add_typer(golive_app, name="golive")

@@ -146,6 +146,11 @@ class BarSubject:
             dpy: Days per year.
         """
         self.strat = REGISTRY[strategy] if isinstance(strategy, str) else strategy
+        starts = getattr(self.strat, "starts", "")
+        if starts:  # inputs that begin later than prices: earlier years aren't evidence either way
+            keep = (bars["ts"] >= pd.Timestamp(starts, tz="UTC")).to_numpy()
+            bars = bars[keep].reset_index(drop=True)
+            rf = None if rf is None else pd.Series(rf.to_numpy()[keep], index=bars.index)
         self.params: dict[str, Param] = self.strat.params
         self.family, self.strategy, self.scope, self.interval = self.strat.family, self.strat.name, symbol, interval
         self.session = getattr(self.strat, "session", "all")  # mined rules may hold only overnight or by day

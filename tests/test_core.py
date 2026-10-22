@@ -75,3 +75,38 @@ def test_backups_are_consistent_copies_and_old_ones_are_dropped():
     assert first["path"].split("/")[-1] in third["removed"]
     m = ops.machine()
     assert len(m["snapshots"]) == 2 and m["disk_free_gb"] > 0
+
+
+def test_the_heartbeat_sees_a_silent_api_and_a_missing_report():
+    """Health problems come from the API and the latest report, judged against the last US close."""
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from qlab import ops
+
+    class Res:
+        def __init__(self, body):
+            self.body = body
+
+        def json(self):
+            return self.body
+
+    class Client:
+        def __init__(self, report):
+            self.report = report
+
+        def get(self, url, timeout):
+            if url.endswith("/health"):
+                return Res({"ok": True})
+            return Res(self.report)
+
+    class Down:
+        def get(self, url, timeout):
+            raise httpx.ConnectError("refused")
+
+    late = datetime(2026, 10, 23, 7, tzinfo=UTC)  # 03:00 New York, eleven hours after the close
+    assert ops.health_problems("x", late, Down()) == ["the Lab API doesn't answer"]
+    assert ops.health_problems("x", late, Client({"created_at": "2026-10-22T23:00:00"})) == []
+    assert "since the 2026-10-22" in ops.health_problems("x", late, Client({"created_at": "2026-10-22T10:00:00"}))[0]
+    assert ops.health_problems("x", datetime(2026, 10, 22, 21, tzinfo=UTC), Client(None)) == []  # still in grace

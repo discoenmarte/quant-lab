@@ -7,14 +7,22 @@ Design (decision 0012):
   the process that holds it: through the API when the server runs, here otherwise.
 - **A few local copies, the rest elsewhere.** ``keep`` snapshots stay in ``<data>/backups``; the server's own
   provider backups (Hetzner keeps seven daily images) and ``make pull`` on the owner's Mac carry them off the machine.
+- **A dead-man's switch outside the machine.** A server that is down can't say so. ``heartbeat`` runs every ten
+  minutes: it checks that the Lab API answers and that a daily report followed the last US close, then pings
+  ``QLAB_HEALTHCHECK_URL`` (a free healthchecks.io check) with success or ``/fail``. When the pings stop or fail,
+  healthchecks.io emails (or messages) the owner.
 - Nothing here touches research results: a snapshot is a copy, and restoring one is a manual step on purpose.
 """
 
 from __future__ import annotations
 
 import shutil
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+import httpx
 
 from . import audit, config, db
 from .timeutil import now_utc
@@ -80,3 +88,60 @@ def machine() -> dict[str, Any]:
             "mem_available_gb": round(mem_avail, 1) if mem_avail is not None else None,
             "mem_total_gb": round(mem_total, 1) if mem_total is not None else None,
             "snapshots": sorted((p.name for p in backups_dir().glob("lab-*.duckdb")), reverse=True)}
+
+
+def health_problems(api: str, now: datetime | None = None, client: Any = None) -> list[str]:
+    """What is wrong with the running lab, as an outside watcher would see it.
+
+    Args:
+        api: Lab API base URL.
+        now: Time (tz-aware); None means now.
+        client: HTTP client with ``get`` (replaced in tests); None uses httpx.
+
+    Returns:
+        Plain-language problems; empty when the API answers and the latest daily report came after the last US close
+        (checked only once the nightly job's grace period after that close has passed).
+    """
+    from .bot import REPORT_GRACE_HOURS, last_session_close
+
+    now = now or now_utc()
+    get = (client or httpx).get
+    try:
+        if get(f"{api}/health", timeout=10).json().get("ok") is not True:
+            return ["the Lab API answers but isn't healthy"]
+    except (httpx.HTTPError, ValueError):
+        return ["the Lab API doesn't answer"]
+    close = last_session_close(now)
+    if now - close < timedelta(hours=REPORT_GRACE_HOURS):
+        return []
+    try:
+        rep = get(f"{api}/report/latest", timeout=30).json()
+    except (httpx.HTTPError, ValueError):
+        return ["the latest daily report can't be read"]
+    if not rep:
+        return ["no daily report has been built yet"]
+    made = datetime.fromisoformat(str(rep["created_at"]))
+    made = made.replace(tzinfo=ZoneInfo("UTC")) if made.tzinfo is None else made
+    return [] if made >= close else [f"no daily report since the {close.date()} US close"]
+
+
+def heartbeat(api: str = "http://127.0.0.1:8765/api", now: datetime | None = None) -> dict[str, Any]:
+    """Check the lab and ping the outside dead-man's switch, when one is configured.
+
+    Args:
+        api: Lab API base URL.
+        now: Time (tz-aware); None means now.
+
+    Returns:
+        ``ok``, ``problems`` and ``pinged`` (False when ``QLAB_HEALTHCHECK_URL`` isn't set or the ping failed).
+    """
+    problems = health_problems(api, now)
+    url = (config.setting("QLAB_HEALTHCHECK_URL") or "").rstrip("/")
+    pinged = False
+    if url:
+        try:
+            httpx.post(url + ("/fail" if problems else ""), content="; ".join(problems) or "ok", timeout=10)
+            pinged = True
+        except httpx.HTTPError:
+            pinged = False
+    return {"ok": not problems, "problems": problems, "pinged": pinged}

@@ -54,6 +54,23 @@ def backup(keep: int = typer.Option(3, help="Snapshots to keep"),
 
 
 @app.command()
+def heartbeat(api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API to check")) -> None:
+    """Check that the lab answers and reported after the last close, and ping QLAB_HEALTHCHECK_URL. Exits 1 on a
+    problem.
+
+    Args:
+        api: Lab API address.
+    """
+    from . import ops
+
+    out = ops.heartbeat(api)
+    typer.echo(("ok" if out["ok"] else "PROBLEM: " + "; ".join(out["problems"]))
+               + ("" if out["pinged"] else " (no outside check pinged)"))
+    if not out["ok"]:
+        raise typer.Exit(1)
+
+
+@app.command()
 def init() -> None:
     """Create the data folders and the database schema."""
     config.ensure_dirs()
@@ -636,6 +653,26 @@ def alerts_channels() -> None:
         typer.echo(f"  {c['name']:<9} {'on ' if c['enabled'] else 'off'}  {c['detail']}")
 
 
+@alerts_app.command("send")
+def alerts_send(title: str = typer.Option(..., help="One line"),
+                message: str = typer.Option("", help="Details"),
+                severity: str = typer.Option("warn", help="info, good, warn or bad")) -> None:
+    """Send one alert through the channels without the database (for systemd's OnFailure hook on the server).
+
+    Args:
+        title: One line.
+        message: Details.
+        severity: Severity.
+    """
+    from . import alerts
+    from .timeutil import now_utc
+
+    item = alerts.Alert(rule="server", severity=severity, key=f"server:{now_utc().isoformat()}", title=title,
+                        message=message, link="/system")
+    for d in alerts.deliver([item]):
+        typer.echo(", ".join(f"{k} {v}" for k, v in d.items()))
+
+
 @alerts_app.command("test")
 def alerts_test() -> None:
     """Send a test alert through every channel and print what each one did."""
@@ -751,11 +788,24 @@ def broker_execute() -> None:
 
 
 @broker_app.command("catchup")
-def broker_catchup() -> None:
-    """After the open: sync, then send once what each sleeve's latest rebalance left unfilled, as day orders."""
-    from .broker import execution
+def broker_catchup(api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API; used when it is up")) -> None:
+    """After the open: sync, then send once what each sleeve's latest rebalance left unfilled, as day orders.
 
-    for r in execution.catch_up(actor="cli"):
+    Args:
+        api: Lab API address.
+    """
+    import httpx
+
+    from .broker import execution
+    from .paper.nightly import api_up
+
+    if api_up(api):
+        res = httpx.post(f"{api}/broker/catchup", timeout=300)
+        res.raise_for_status()
+        results = res.json()
+    else:
+        results = execution.catch_up(actor="cli")
+    for r in results:
         typer.echo(f"  [{r['status']:<14}] {r['entry_id']}  decision {r['as_of']}")
         for o in r["orders"]:
             typer.echo(f"      {o['side']:<4} {o['qty']:g} {o['symbol']:<9} {o['tif']:<4} {o['status']}"
@@ -873,8 +923,10 @@ def inbox_run(
     spec_limit: int = typer.Option(3, help="Most specs to draft"),
     query: list[str] = typer.Option(None, help="A keyword query (repeatable); default: the configured ones"),
     no_queries: bool = typer.Option(False, "--no-queries", help="Fetch only the newest listing"),
+    api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API; the run happens there when it is up"),
 ) -> None:
-    """Fetch new papers, score them on the rubric, draft specs for the best, and send the digest.
+    """Fetch new papers, score them on the rubric, draft specs for the best, and send the digest. Exits 1 if the run
+    failed.
 
     Args:
         max_papers: Most papers to fetch from the newest listing.
@@ -883,10 +935,36 @@ def inbox_run(
         spec_limit: Most specs.
         query: Keyword queries to run after the listing.
         no_queries: Skip the keyword queries.
+        api: Lab API address.
     """
+    import time
+
+    import httpx
+
     from .inbox import digest
+    from .paper.nightly import api_up
 
     frontier = [] if no_queries else (list(query or []) or None)
+    if api_up(api):
+        res = httpx.post(f"{api}/inbox/run", timeout=30, json={
+            "max_papers": max_papers, "triage_limit": triage_limit, "spec_min_score": spec_min_score,
+            "spec_limit": spec_limit, "frontier": frontier})
+        if res.status_code >= 400:
+            raise typer.BadParameter(res.json().get("detail", res.text))
+        job_id, job = res.json()["id"], {}
+        typer.echo(f"inbox run {job_id} started on the lab server")
+        while True:
+            time.sleep(15)
+            job = next((j for j in httpx.get(f"{api}/inbox/jobs", timeout=30).json() if j["id"] == job_id), {})
+            if job.get("status") != "running":
+                break
+        for line in job.get("log", [])[-5:]:
+            typer.echo(f"  {line}")
+        for line in job.get("digest") or []:
+            typer.echo(line)
+        if job.get("status") != "done":
+            raise typer.Exit(1)
+        return
     out = digest.run(max_papers, triage_limit, spec_min_score, spec_limit, frontier, actor="cli", log=typer.echo)
     for line in out["digest"]["headline"]:
         typer.echo(line)
@@ -1095,7 +1173,7 @@ def mine_run(
 
 @mine_app.command("nightly")
 def mine_nightly(
-    workers: int = typer.Option(4, help="Evaluation processes"),
+    workers: int = typer.Option(0, help="Evaluation processes; 0 uses all cores but one, at most 4"),
     minutes: float = typer.Option(40.0, help="Wall-clock limit of the job"),
     api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API; the job runs there when it is up"),
 ) -> None:
@@ -1106,9 +1184,12 @@ def mine_nightly(
         minutes: Time limit.
         api: Lab API address.
     """
+    import os
+
     from .mining import nightly
 
-    out = nightly.run(api, workers, minutes, log=typer.echo)
+    n = workers or min(4, max(1, (os.cpu_count() or 2) - 1))
+    out = nightly.run(api, n, minutes, log=typer.echo)
     typer.echo(out["message"])
     for i, t in enumerate(out.get("top") or [], 1):
         edge = t["edge"] if t["edge"] is not None else float("nan")

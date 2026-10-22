@@ -235,6 +235,39 @@ def _insider_timing(bars: pd.DataFrame, window: int = 60, lookback: int = 730, t
     return insider_timing(bars, window, lookback, threshold)
 
 
+def _intraday_momentum(bars: pd.DataFrame, window: int = 1, hold: int = 1, vol_filter: int = 0) -> pd.Series:
+    """Intraday momentum on hourly bars (``qlab.intraday.rules.intraday_momentum``), imported when first used.
+
+    Args:
+        bars: Normalised hourly bars.
+        window: Hours from 00:00 UTC that give the signal.
+        hold: Last hours of the day to hold.
+        vol_filter: 1 trades only after a volatile day.
+
+    Returns:
+        Target positions.
+    """
+    from ..intraday.rules import intraday_momentum
+
+    return intraday_momentum(bars, window, hold, vol_filter)
+
+
+def _range_breakout(bars: pd.DataFrame, window: int = 4, vol_filter: int = 0) -> pd.Series:
+    """Opening-range breakout on hourly bars (``qlab.intraday.rules.range_breakout``), imported when first used.
+
+    Args:
+        bars: Normalised hourly bars.
+        window: Hours that set the range.
+        vol_filter: 1 trades only after a volatile day.
+
+    Returns:
+        Target positions.
+    """
+    from ..intraday.rules import range_breakout
+
+    return range_breakout(bars, window, vol_filter)
+
+
 REGISTRY: dict[str, Strategy] = {
     s.name: s
     for s in [
@@ -298,6 +331,29 @@ REGISTRY: dict[str, Strategy] = {
             },
             "Seyhun (1988); Lakonishok & Lee (2001); Jiang & Zaman (2010)",
             starts="2009-01-02",
+        ),
+        Strategy(
+            "intraday_momentum", "intraday_momentum",
+            "Hourly bars only. Hold the last hours of the UTC day when its first hours went up; flat at 00:00 UTC. "
+            "Optionally only after a volatile day (the selector). Intraday mode (M9).",
+            _intraday_momentum,
+            {
+                "window": Param(1, 1, 12, 1, "Hours from 00:00 UTC that give the signal"),
+                "hold": Param(1, 1, 4, 1, "Last hours of the day held"),
+                "vol_filter": Param(0, 0, 1, 1, "1 = only after a day more volatile than usual"),
+            },
+            "Gao, Han, Li & Zhou (2018); Wen, Bouri, Xu & Zhao (2022)",
+        ),
+        Strategy(
+            "range_breakout", "range_breakout",
+            "Hourly bars only. Buy a close above the high of the day's first hours, hold to 00:00 UTC. Optionally "
+            "only after a volatile day (the selector). Intraday mode (M9).",
+            _range_breakout,
+            {
+                "window": Param(4, 1, 12, 1, "Hours from 00:00 UTC that set the range"),
+                "vol_filter": Param(0, 0, 1, 1, "1 = only after a day more volatile than usual"),
+            },
+            "Opening-range breakout (Crabel, 1990; Zarattini & Aziz, 2023)",
         ),
     ]
 }

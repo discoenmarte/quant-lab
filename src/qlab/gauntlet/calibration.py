@@ -25,6 +25,10 @@ From the two rates the report also computes the precision of the gate against a 
 the same prior share of real edges (Zheng, 2026): a gate is worth having only if what it admits is more often
 real than what a coin would admit.
 
+Intraday rules (M9, decision 0015) are calibrated on synthetic hourly crypto markets with an intraday volatility
+profile (``intraday.synthetic``), judged with crypto costs and 365 days a year. Their families are named
+``hourly/<strategy>``; power is measured on planted intraday momentum for the momentum rule.
+
 Every run uses the production code path (``pipeline.evaluate``) and thresholds, and its grid is recorded in
 the ledger under ``calib:`` questions, so even calibration counts its trials. Runs are independent, so they go
 to a process pool; nothing in a worker touches the database.
@@ -80,6 +84,10 @@ BATCHES = {
     "xs100": [f"xs100/{k}" for k in XS_STRATEGIES],
 }
 STUDY_METHODS = (*stats.VARIANCE_METHODS, "positive_gross")  # positive_gross is measured, not offered
+HOURLY_STRATEGIES = ["intraday_momentum", "range_breakout"]
+HOURLY_POWER = ["intraday_momentum"]  # planted intraday momentum
+HOURLY_YEARS = 7.1  # the research length of Binance's hourly BTC and ETH bars (2017-08 to the lockbox)
+HOURLY_DPY = 365
 
 
 def _xs_parts(family: str) -> tuple[int, str]:
@@ -215,14 +223,26 @@ def true_edge(family: str, trend: float, years: float = 400.0, seed: int = 12345
     """Long-run edge Sharpe of a family's default rule in a planted-trend market: the truth power is measured at.
 
     Args:
-        family: Strategy registry key, or ``portfolio/<key>`` for a portfolio strategy on a synthetic panel.
-        trend: Hidden trend size (see ``synthetic_bars`` and ``synthetic_panel``).
-        years: Simulation length; 400 years gives a standard error near 0.05 (panels use at most 150).
+        family: Strategy registry key, ``portfolio/<key>`` for a portfolio strategy on a synthetic panel, or
+            ``hourly/<key>`` for an intraday rule on a synthetic hourly market.
+        trend: Hidden trend size (see ``synthetic_bars`` and ``synthetic_panel``), or the planted intraday momentum.
+        years: Simulation length; 400 years gives a standard error near 0.05 (panels use at most 150, hourly markets
+            at most 120).
         seed: Random seed.
 
     Returns:
         Annual edge Sharpe after ETF costs (crypto costs for cross-sectional families).
     """
+    if family.startswith("hourly/"):
+        from ..intraday.synthetic import synthetic_hourly
+
+        hb = synthetic_hourly(min(years, 120.0), trend, seed)
+        res_h = run(hb, REGISTRY[family.split("/", 1)[1]].positions(hb), COST_PRESETS["crypto"], with_trades=False)
+        from .subjects import to_daily
+
+        e, _ = metrics.edge(to_daily(res_h.returns.to_numpy(), hb["ts"]).to_numpy(),
+                            to_daily(res_h.benchmark.to_numpy(), hb["ts"]).to_numpy())
+        return float(metrics.sharpe(e, None, HOURLY_DPY))
     if family.startswith("xs"):
         return float(np.mean([_xs_truth_one((family, trend, 777_000 + k)) for k in range(XS_TRUTH_SEEDS)]))
     if family.startswith("portfolio/"):
@@ -269,6 +289,13 @@ def make_subject(task: dict[str, Any]) -> BarSubject | PanelSubject:
         A ``BarSubject`` on synthetic bars, a ``PanelSubject`` on a synthetic eight-asset panel for a portfolio
         family, or one on a synthetic crypto cross-section for a cross-sectional family.
     """
+    if task["family"].startswith("hourly/"):
+        from ..intraday.synthetic import synthetic_hourly  # intraday builds on the gauntlet: one-way layers
+
+        hb = synthetic_hourly(task["years"], task["trend"], task["seed"])
+        return BarSubject(hb, task["family"].split("/", 1)[1], hb["ts"].iloc[-1] + pd.Timedelta(days=1),
+                          source="synthetic", symbol="SYNTH", interval="1h", model=COST_PRESETS["crypto"], rf=None,
+                          dpy=HOURLY_DPY)
     if task["family"].startswith("xs"):
         panel = xs_panel(task["family"], task["years"], task["trend"], task["seed"])
         return PanelSubject(panel, _xs_parts(task["family"])[1], panel.ts[-1] + pd.Timedelta(days=1),
@@ -505,6 +532,8 @@ def run_calibration(
     portfolio_power_reps: int = 20,
     xs_reps: int = 0,
     xs_power_reps: int = 15,
+    hourly_reps: int = 0,
+    hourly_power_reps: int = 20,
 ) -> dict[str, Any]:
     """Run the calibration study and save its report.
 
@@ -525,6 +554,8 @@ def run_calibration(
         portfolio_power_reps: Planted-trend runs per portfolio family, edge size and history length.
         xs_reps: Noise runs per cross-sectional crypto family, universe size and researcher type (0 skips them).
         xs_power_reps: Planted-edge runs per cross-sectional power family, edge size and history length.
+        hourly_reps: Noise runs per intraday family and researcher type on hourly markets (0 skips them).
+        hourly_power_reps: Planted-momentum runs per edge size for the intraday momentum rule.
 
     Returns:
         The report: ``id``, ``created_at``, ``thresholds_version``, ``settings``, ``noise``, ``power``,
@@ -577,6 +608,27 @@ def run_calibration(
                     seed += 1
                     tasks.append({"scenario": "power", "family": family, "years": y, "trend": p_sizes[target],
                                   "target": target, "true_edge": truth[(family, target)], "seed": seed, "th": th})
+
+    h_sizes: dict[float, float] = {}
+    if hourly_reps:
+        for key in HOURLY_POWER:
+            fam = f"hourly/{key}"
+            h_sizes = trend_sizes(fam, edges, 8)
+            truth.update({(fam, t): true_edge(fam, h_sizes[t]) for t in edges})
+        log(f"hourly planted momentum {h_sizes}")
+        for key in HOURLY_STRATEGIES:
+            for scenario in ("noise_fixed", "noise_tuned"):
+                for _ in range(hourly_reps):
+                    seed += 1
+                    tasks.append({"scenario": scenario, "family": f"hourly/{key}", "years": HOURLY_YEARS,
+                                  "trend": 0.0, "seed": seed, "th": th})
+        for key in HOURLY_POWER:
+            fam = f"hourly/{key}"
+            for target in edges:
+                for _ in range(hourly_power_reps):
+                    seed += 1
+                    tasks.append({"scenario": "power", "family": fam, "years": HOURLY_YEARS, "trend": h_sizes[target],
+                                  "target": target, "true_edge": truth[(fam, target)], "seed": seed, "th": th})
 
     runs: list[dict[str, Any]] = []
     n_workers = workers or max(1, (os.cpu_count() or 2) - 1)
@@ -631,6 +683,8 @@ def run_calibration(
                      "portfolio_trend_sizes": {str(k): v for k, v in p_sizes.items()},
                      "portfolio_reps": portfolio_reps, "portfolio_power_reps": portfolio_power_reps,
                      "xs_reps": xs_reps, "xs_power_reps": xs_power_reps,
+                     "hourly_reps": hourly_reps, "hourly_power_reps": hourly_power_reps,
+                     "hourly_planted_momentum": {str(k): v for k, v in h_sizes.items()},
                      "xs_planted_sizes": {f: {str(k): v for k, v in d.items()} for f, d in x_sizes.items()},
                      "n_runs": len(runs), "n_trials": len(trials), "base_seed": base_seed,
                      "code": code},
@@ -889,6 +943,8 @@ def headline(report: dict[str, Any]) -> str:
         text += f" Single-instrument trend rule detects a planted edge — {curve('trend_sma')}."
     if any(p["family"].startswith("portfolio/") for p in report["power"]):
         text += f" Portfolio trend (8 assets) — {curve('portfolio/tsmom')}."
+    if any(p["family"].startswith("hourly/") for p in report["power"]):
+        text += f" Intraday momentum (hourly) — {curve('hourly/intraday_momentum')}."
     if any(p["family"].startswith("xs") for p in report["power"]):
         text += (f" Crypto momentum (top 30) — {curve('xs30/xs_weekly_momentum')}."
                  f" Crypto size (top 30) — {curve('xs30/xs_small_size')}.")

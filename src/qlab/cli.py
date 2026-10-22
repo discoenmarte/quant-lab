@@ -291,6 +291,8 @@ def calibrate(
     portfolio_reps: int = typer.Option(40, help="Noise runs per portfolio family and researcher type; 0 skips"),
     xs_reps: int = typer.Option(0, help="Noise runs per crypto cross-section family, size and researcher; 0 skips"),
     xs_power_reps: int = typer.Option(15, help="Planted-edge runs per crypto cross-section setting"),
+    hourly_reps: int = typer.Option(0, help="Noise runs per intraday family and researcher on hourly markets; 0 skips"),
+    hourly_power_reps: int = typer.Option(20, help="Planted-momentum runs per edge size for intraday momentum"),
 ) -> None:
     """Measure the gauntlet's false-positive rate on noise and its power on planted edges.
 
@@ -302,18 +304,21 @@ def calibrate(
         portfolio_reps: Noise runs per portfolio family and researcher type.
         xs_reps: Noise runs per crypto cross-section family, universe size and researcher type.
         xs_power_reps: Planted-edge runs per crypto cross-section family, edge size and history length.
+        hourly_reps: Noise runs per intraday family and researcher type (0 skips them).
+        hourly_power_reps: Planted-momentum runs per edge size for the intraday momentum rule.
     """
     from .gauntlet.calibration import run_calibration
 
     rep = run_calibration(noise_reps, power_reps, workers=workers or None, log=typer.echo, actor="cli",
                           base_seed=seed, portfolio_reps=portfolio_reps, xs_reps=xs_reps,
-                          xs_power_reps=xs_power_reps)
+                          xs_power_reps=xs_power_reps, hourly_reps=hourly_reps,
+                          hourly_power_reps=hourly_power_reps)
     typer.echo(f"\nReport {rep['id']} ({rep['elapsed_s']} s, {rep['settings']['n_trials']:,} trials recorded)")
     for r in rep["noise"]:
-        typer.echo(f"  noise  {r['family']:<14} {r['scenario']:<12} {r['admitted']:>3}/{r['n']:<4} "
+        typer.echo(f"  noise  {r['family']:<26} {r['scenario']:<12} {r['admitted']:>3}/{r['n']:<4} "
                    f"{r['rate']:6.1%}  [{r['low']:.1%}, {r['high']:.1%}]")
     for r in rep["power"]:
-        typer.echo(f"  power  {r['family']:<14} edge {r['true_edge']:.2f}  {r['years']:>4g} y  "
+        typer.echo(f"  power  {r['family']:<26} edge {r['true_edge']:.2f}  {r['years']:>4g} y  "
                    f"{r['admitted']:>3}/{r['n']:<4} {r['rate']:6.1%}")
     typer.echo(rep["headline"])
     for basis, s in rep["by_regime_basis"].items():

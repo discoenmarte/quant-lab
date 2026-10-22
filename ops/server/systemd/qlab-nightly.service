@@ -1,0 +1,14 @@
+# quant-lab: nightly paper job: ingest, wait for a late close, decide, score, paper orders, daily report
+[Unit]
+Description=quant-lab nightly paper job: ingest, wait for a late close, decide, score, paper orders, daily report
+After=qlab-api.service
+Wants=qlab-api.service
+OnFailure=qlab-failed@%n.service
+
+[Service]
+Type=oneshot
+User=qlab
+WorkingDirectory=/srv/quant-lab
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/quant-lab/.venv/bin/qlab paper nightly --wait-minutes 300
+TimeoutStartSec=7h

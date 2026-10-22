@@ -195,9 +195,10 @@ class ClaudeCLIProvider:
         """Whether the CLI exists.
 
         Returns:
-            True when the executable is found.
+            True when the executable is on the PATH or in ``~/.local/bin`` (where its installer puts it, and which a
+            service's PATH may not include).
         """
-        return shutil.which("claude") is not None
+        return Path(self._bin).exists()
 
     def ask_json(self, system: str, prompt: str, schema: dict[str, Any] | None = None) -> Answer:
         """Ask the CLI once, with no tools, and parse the JSON object in its answer.

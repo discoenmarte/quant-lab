@@ -1,0 +1,10 @@
+# quant-lab: run the heartbeat every ten minutes.
+[Unit]
+Description=quant-lab heartbeat schedule
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+# quant-lab: morning broker step: sync fills, catch up what the opening auction left
+[Unit]
+Description=quant-lab morning broker step: sync fills, catch up what the opening auction left
+After=qlab-api.service
+Wants=qlab-api.service
+OnFailure=qlab-failed@%n.service
+
+[Service]
+Type=oneshot
+User=qlab
+WorkingDirectory=/srv/quant-lab
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/quant-lab/.venv/bin/qlab broker catchup
+TimeoutStartSec=20min

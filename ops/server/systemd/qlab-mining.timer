@@ -1,0 +1,11 @@
+# quant-lab: when to run qlab-mining.service. Times are in the exchange's or the owner's timezone, not the server's.
+[Unit]
+Description=quant-lab nightly mining schedule
+
+[Timer]
+OnCalendar=*-*-* 01:30 America/New_York
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

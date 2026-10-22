@@ -1,0 +1,9 @@
+# quant-lab: tell the owner (Telegram, and the alert file) that a server job failed. Started by OnFailure=.
+[Unit]
+Description=quant-lab alert: %i failed
+
+[Service]
+Type=oneshot
+User=qlab
+WorkingDirectory=/srv/quant-lab
+ExecStart=/srv/quant-lab/.venv/bin/qlab alerts send --severity bad --title "Server job %i failed" --message "On the server: journalctl -u %i -n 80"

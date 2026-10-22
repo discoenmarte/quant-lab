@@ -1,0 +1,16 @@
+# quant-lab: the Telegram bot (read the lab, pause, kill) and its watchdog. Talks only to the Lab API.
+[Unit]
+Description=quant-lab Telegram bot
+After=qlab-api.service
+Wants=qlab-api.service
+
+[Service]
+User=qlab
+WorkingDirectory=/srv/quant-lab
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/quant-lab/.venv/bin/qlab bot run
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

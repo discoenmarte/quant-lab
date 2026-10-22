@@ -28,6 +28,10 @@ from . import audit, config, db
 from .timeutil import now_utc
 
 
+MIN_DISK_GB = 3.0  # three snapshots need about 2.5 GB; below this the next one may not fit
+MIN_MEM_GB = 0.3
+
+
 def backups_dir() -> Path:
     """Where snapshots are kept.
 
@@ -133,9 +137,15 @@ def heartbeat(api: str = "http://127.0.0.1:8765/api", now: datetime | None = Non
         now: Time (tz-aware); None means now.
 
     Returns:
-        ``ok``, ``problems`` and ``pinged`` (False when ``QLAB_HEALTHCHECK_URL`` isn't set or the ping failed).
+        ``ok``, ``problems`` (the lab's, plus disk below ``MIN_DISK_GB`` or memory below ``MIN_MEM_GB``) and
+        ``pinged`` (False when ``QLAB_HEALTHCHECK_URL`` isn't set or the ping failed).
     """
     problems = health_problems(api, now)
+    m = machine()
+    if m["disk_free_gb"] < MIN_DISK_GB:
+        problems.append(f"only {m['disk_free_gb']} GB of disk left")
+    if m["mem_available_gb"] is not None and m["mem_available_gb"] < MIN_MEM_GB:
+        problems.append(f"only {m['mem_available_gb']} GB of memory available")
     url = (config.setting("QLAB_HEALTHCHECK_URL") or "").rstrip("/")
     pinged = False
     if url:

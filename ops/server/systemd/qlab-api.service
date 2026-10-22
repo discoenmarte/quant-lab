@@ -1,0 +1,20 @@
+# quant-lab: the Lab API and the web app, the one process that holds the database.
+# Listens on 127.0.0.1 only: reach it through an SSH tunnel (see docs/DEPLOY.md), never on a public port.
+[Unit]
+Description=quant-lab API and web app (127.0.0.1:8765)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=qlab
+WorkingDirectory=/srv/quant-lab
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/qlab/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/srv/quant-lab/.venv/bin/qlab serve --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=5
+# Mining workers are children of this service; keep the machine usable if they grow.
+MemoryHigh=85%
+
+[Install]
+WantedBy=multi-user.target

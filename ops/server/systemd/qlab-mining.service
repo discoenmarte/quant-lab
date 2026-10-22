@@ -1,0 +1,14 @@
+# quant-lab: nightly mining rotation (one budgeted job, judged only past the luck bar)
+[Unit]
+Description=quant-lab nightly mining rotation (one budgeted job, judged only past the luck bar)
+After=qlab-api.service
+Wants=qlab-api.service
+OnFailure=qlab-failed@%n.service
+
+[Service]
+Type=oneshot
+User=qlab
+WorkingDirectory=/srv/quant-lab
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/quant-lab/.venv/bin/qlab mine nightly --minutes 40
+TimeoutStartSec=2h

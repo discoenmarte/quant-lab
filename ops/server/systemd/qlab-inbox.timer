@@ -1,0 +1,11 @@
+# quant-lab: when to run qlab-inbox.service. Times are in the exchange's or the owner's timezone, not the server's.
+[Unit]
+Description=quant-lab weekly research inbox schedule
+
+[Timer]
+OnCalendar=Sun 19:00 America/New_York
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

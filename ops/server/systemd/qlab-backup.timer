@@ -1,0 +1,11 @@
+# quant-lab: when to run qlab-backup.service. Times are in the exchange's or the owner's timezone, not the server's.
+[Unit]
+Description=quant-lab daily database snapshot schedule
+
+[Timer]
+OnCalendar=*-*-* 04:30 America/New_York
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

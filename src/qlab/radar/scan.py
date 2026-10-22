@@ -258,9 +258,10 @@ def readings(sigs: list[signals.Signal], cal: dict[str, Any] | None, now: dateti
                 stat = detect.statistic(x.to_numpy(), d, s.window, s.direction,
                                         h=c["notable"] if d == "cusum" else None)
             score = float(stat[-1]) if np.isfinite(stat[-1]) else None
+            top = c["severe"] if c.get("severe") is not None else float("inf")  # JSON stores "no severe level" as null
             sev = None
-            if score is not None and not stale:
-                sev = "severe" if score >= c["severe"] else "notable" if score >= c["notable"] else None
+            if score is not None and not stale and c.get("notable") is not None:
+                sev = "severe" if score >= top else "notable" if score >= c["notable"] else None
             out.append({**common, "detector": d, "score": score, "notable": c["notable"], "severe": c["severe"],
                         "severity": sev,
                         "since": _since(stat, c["notable"], x.index).isoformat() if sev else None,

@@ -15,7 +15,9 @@ Thresholds come from the series' own history, never from what would have made mo
 
 - **Budget.** An alarm *episode* starts when the statistic crosses its threshold after at least ``COOLDOWN``
   observations below it. The threshold is set so that the history holds the budgeted number of episodes: by default
-  one a month per series and detector for a *notable* anomaly and one a year for a *severe* one.
+  one a month per series and detector for a *notable* anomaly and one a year for a *severe* one. It is also never
+  below the level that 5% (notable) or 0.5% (severe) of observations exceed, so a slow series with long episodes
+  can't turn an ordinary day into an anomaly.
 - **Measured false-alarm rate.** History includes real events, so its rate is the budget by construction. The false
   rate is measured on null histories with no events: the same values in random order (same distribution, fat tails
   included, nothing to detect). Reported per month.
@@ -43,6 +45,9 @@ RECENT = 5  # BOCPD's statistic: probability the regime began within this many o
 COOLDOWN = 5
 NOTABLE_PER_MONTH = 1.0
 SEVERE_PER_MONTH = 1.0 / 12
+# At most this share of observations may sit above each threshold. Slow series (realised volatility, CUSUM sums) have
+# long episodes, so an episode budget alone would put the threshold on ordinary days.
+MAX_SHARE = {"notable": 0.05, "severe": 0.005}
 NULL_REPS = 10
 PLANT_REPS = 10
 PLANT_SIZES = {"": 3.0, "_small": 1.0}  # a spike-sized step, and a subtle persistent one where CUSUM helps
@@ -313,12 +318,18 @@ def calibrate(x: np.ndarray, detector: str, window: int, direction: str, months:
     n_def = int(np.isfinite(stat).sum())
     months = max(months * n_def / max(len(x), 1), 1e-9)  # only the part where the statistic exists
     targets = {"notable": max(1, round(NOTABLE_PER_MONTH * months)), "severe": max(1, round(SEVERE_PER_MONTH * months))}
-    th = {k: threshold_for(stat, t) for k, t in targets.items()}
+
+    def fit(st: np.ndarray, kind: str) -> float:
+        vals = st[np.isfinite(st)]
+        floor = float(np.quantile(vals, 1 - MAX_SHARE[kind])) if len(vals) else float("inf")
+        return max(threshold_for(st, targets[kind]), floor)
+
+    th = {k: fit(stat, k) for k in targets}
     if detector == "cusum":  # live CUSUM resets at its threshold; fit the threshold to that form
-        for k, t in targets.items():
+        for k in targets:
             h = th[k]
             for _ in range(4):
-                h = threshold_for(_cusum_stat(x, window, direction, h), t)
+                h = fit(_cusum_stat(x, window, direction, h), k)
             th[k] = h
     live = (lambda v, h: _cusum_stat(v, window, direction, h)) if detector == "cusum" else (
         lambda v, _h: statistic(v, detector, window, direction))

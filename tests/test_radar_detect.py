@@ -66,12 +66,12 @@ def test_episodes_need_a_quiet_spell_between_them():
 
 @pytest.mark.parametrize("detector", detect.DETECTORS)
 def test_calibration_meets_the_budget_and_measures_false_alarms_and_delay(detector):
-    """History holds about one notable episode a month; shuffled noise alarms no more often; big steps are caught."""
+    """History holds at most about one notable episode a month; shuffled noise alarms no more; big steps are caught."""
     x = noise(2520, 3)  # ten years of trading days
     months = 2520 / 21
     c = detect.calibrate(x, detector, 90, "up", months, null_reps=4, plant_reps=6)
     assert c["severe"] > c["notable"]
-    assert 0.6 <= c["history_rate"] <= 1.3
+    assert 0.2 <= c["history_rate"] <= 1.3
     assert c["null_rate"] <= 1.5 and c["null_rate_severe"] <= 0.25
     assert c["detect_rate"] >= 0.8 and c["delay"] is not None and c["delay"] <= 5
     assert c["detect_rate_small"] is not None

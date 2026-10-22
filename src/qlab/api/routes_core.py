@@ -45,6 +45,30 @@ def health() -> dict[str, Any]:
     return {"ok": True, "version": __version__, **clocks()}
 
 
+@router.post("/ops/backup")
+def ops_backup() -> dict[str, Any]:
+    """Write a consistent snapshot of the lab database (the server holds it, so it is taken here).
+
+    Returns:
+        ``path``, ``bytes``, ``seconds`` and ``removed``.
+    """
+    from .. import ops
+
+    return ops.backup(actor="api")
+
+
+@router.get("/ops/machine")
+def ops_machine() -> dict[str, Any]:
+    """Disk and memory left, and the snapshots kept.
+
+    Returns:
+        See ``ops.machine``.
+    """
+    from .. import ops
+
+    return ops.machine()
+
+
 @router.get("/system")
 def system() -> dict[str, Any]:
     """Versions, paths, database size, record counts and links to companion services.

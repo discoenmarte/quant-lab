@@ -53,3 +53,25 @@ def test_api_health_system_and_demo():
     system = client.get("/api/system").json()
     assert system["counts"]["trials"] == 2
     assert client.get("/api/audit").json()[0]["action"] == "demo.run"
+
+
+def test_backups_are_consistent_copies_and_old_ones_are_dropped():
+    """A snapshot opens as a database with the same rows; only the newest ``keep`` stay."""
+    import time
+
+    import duckdb
+
+    from qlab import ops
+
+    audit.log("test.event", target="x")
+    first = ops.backup(keep=2)
+    time.sleep(1.1)
+    ops.backup(keep=2)
+    time.sleep(1.1)
+    third = ops.backup(keep=2)
+    con = duckdb.connect(third["path"], read_only=True)
+    assert con.execute("SELECT count(*) FROM audit WHERE action = 'test.event'").fetchone()[0] == 1
+    con.close()
+    assert first["path"].split("/")[-1] in third["removed"]
+    m = ops.machine()
+    assert len(m["snapshots"]) == 2 and m["disk_free_gb"] > 0

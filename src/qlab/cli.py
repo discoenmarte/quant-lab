@@ -29,6 +29,31 @@ def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> No
 
 
 @app.command()
+def backup(keep: int = typer.Option(3, help="Snapshots to keep"),
+           api: str = typer.Option("http://127.0.0.1:8765/api", help="Lab API; the snapshot is taken there when up")
+           ) -> None:
+    """Write a consistent snapshot of the lab database into <data>/backups and keep the newest few.
+
+    Args:
+        keep: Snapshots to keep.
+        api: Lab API address.
+    """
+    import httpx
+
+    from . import ops
+    from .paper.nightly import api_up
+
+    if api_up(api):
+        res = httpx.post(f"{api}/ops/backup", timeout=1800)
+        res.raise_for_status()
+        out = res.json()
+    else:
+        out = ops.backup(keep, actor="cli")
+    typer.echo(f"snapshot {out['path']} ({out['bytes'] / 2**20:,.0f} MB, {out['seconds']} s)"
+               + (f"; removed {', '.join(out['removed'])}" if out["removed"] else ""))
+
+
+@app.command()
 def init() -> None:
     """Create the data folders and the database schema."""
     config.ensure_dirs()

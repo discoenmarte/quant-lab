@@ -610,7 +610,7 @@ def run_calibration(
                                   "target": target, "true_edge": truth[(family, target)], "seed": seed, "th": th})
 
     h_sizes: dict[float, float] = {}
-    if hourly_reps:
+    if hourly_reps or hourly_power_reps:
         for key in HOURLY_POWER:
             fam = f"hourly/{key}"
             h_sizes = trend_sizes(fam, edges, 8)

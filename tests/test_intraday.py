@@ -67,8 +67,10 @@ def test_synthetic_hours_follow_the_profile_and_momentum_is_planted():
     planted = synthetic_hourly(3.0, momentum=0.5, seed=4)
     rp = np.log(planted["close"]).diff().to_numpy()
     h = planted["ts"].dt.hour.to_numpy()
-    first, last = rp[h == 0][1:], rp[h == 23][1:]
-    assert np.corrcoef(np.sign(first), last)[0, 1] > 0.2
+    first = sum(rp[h == k][1:] for k in range(4))
+    for k in (20, 23):
+        assert np.corrcoef(np.sign(first), rp[h == k][1:])[0, 1] > 0.2
+    assert abs(np.corrcoef(np.sign(first), rp[h == 12][1:])[0, 1]) < 0.1  # the middle of the day carries nothing
 
 
 def test_calibration_builds_hourly_subjects_with_crypto_costs():

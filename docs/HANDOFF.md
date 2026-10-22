@@ -3,9 +3,8 @@
 How to pick this project up and keep building it. Read this, then `README.md`, `ROADMAP.md` and
 `docs/STYLE.md`.
 
-- **Last updated:** 2026-10-19, after M3, M3b, M7a, M3c, M6, the Deflated Sharpe variance fix (thresholds v3), M7b,
-  the regimes stage on the edge (thresholds v4), the near-miss caps, M4 (research inbox) and M5 (strategy
-  mining, thresholds v5)
+- **Last updated:** 2026-10-22, after the always-on server (decision 0012), M8 (go-live gate), M5b (insider
+  signal) and M9 (intraday library), on top of M3-M7b, M4 and M5 (thresholds v5)
 - **Repository:** https://github.com/discoenmarte/quant-lab (public)
 - **Owner:** discoenmarte, a computer scientist learning quant research
 
@@ -31,6 +30,7 @@ How to pick this project up and keep building it. Read this, then `README.md`, `
 | Python | uv 0.13.1 manages Python 3.12 and `.venv` (`uv sync --group dev`) |
 | Web | Node 26.12, npm 11; Vite 8, React 19, TypeScript 7, ECharts 6, Lightweight Charts 5 |
 | GitHub | `gh` CLI logged in as `discoenmarte`; remote uses SSH (`git@github.com:discoenmarte/quant-lab.git`) |
+| Server | Not created yet (the owner's step). Plan: Hetzner CAX11, Ubuntu 24.04, `/srv/quant-lab`, user `qlab`; see `docs/DEPLOY.md` |
 | Local LLMs | Ollama with `qwen3.6:35b` (22 GB, default for M4), `gpt-oss:20b`, `qwen2.5:14b`, `llama3.2:3b`. Start with `ollama serve`. |
 | Claude Code CLI | `~/.local/bin/claude`; usable headless (`claude -p ... --output-format json`) as an optional LLM provider |
 | Paid services | None besides the owner's Claude subscription. Everything else must stay free. |
@@ -78,6 +78,13 @@ src/qlab/inbox/           research inbox (decision 0010): llm (Ollama and Claude
 src/qlab/broker/          broker paper trading: base (paper-only client, types), alpaca (paper API), binance_testnet
                           (spot testnet), controls (kill, pause, resume, limits; append-only log), execution
                           (sleeves, orders, fills, reconciliation, slippage, kill and flatten)
+src/qlab/informed/        Pipeline C (decision 0014): insiders (SEC Form 345 data sets, daily insider series, the
+                          insider_timing rule)
+src/qlab/intraday/        M9 (decision 0015): rules (intraday momentum, range breakout, volatility selector), synthetic
+                          (hourly calibration markets), cockpit (what the Intraday Cockpit shows)
+src/qlab/golive.py        M8 (decision 0013): the go-live checklist from evidence, the owner's signed plan
+src/qlab/bot.py           the Telegram bot (reads, pause, two-step kill), its watchdog and the setup helpers
+src/qlab/ops.py           snapshots through the database's writer, machine stats, the heartbeat
 src/qlab/api/main.py      FastAPI app; serves web/dist at /
 src/qlab/api/routes_core.py    /api/health, /system, /overview, /audit, /glossary, POST /demo
 src/qlab/api/routes_paper.py   /api/paper/book, /entries, /entries/{id}, /entries/{id}/retire, /run, /score
@@ -106,6 +113,7 @@ docs/decisions/           0001 Python first / Rust measured, 0002 REA scope, 000
                           inbox, 0011 strategy mining
 docs/preregistration/     batches written down and committed before they run
 ops/launchd/              template for the nightly job (rendered by `make paper-launchd`, never installed)
+ops/server/               bootstrap.sh, deploy.sh and systemd/ (services, New York timers, the OnFailure alert)
 ```
 
 Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help` lists everything.
@@ -125,7 +133,72 @@ Run: `make setup`, `make test`, `make serve` (http://127.0.0.1:8765). `make help
 | M7b | Broker paper trading | **Done** (tag `m7b`). Paper-only adapters (Alpaca paper, Binance testnet), sleeves, raw-price sizing, opening-auction orders, limits, kill switch in the top bar, reconciliation, slippage vs the model. Alpaca paper account connected; nothing enrolled yet (the owner's call). |
 | M4 | Research inbox | **Done** (tag `m4`). arXiv feed with frontier queries, a seven-point rubric from the local model, specs from the full text onto existing templates, the owner's review, replication with history before each window, post-publication runs, a weekly digest, the cost meter, Research Inbox page. Three papers' TSMOM benchmarks replicated within tolerance (decision 0010). |
 | M5 | Strategy mining | **Done** (tag `m5`). Grammar of signals, filters, exits, sessions and sizing; formulas that can't read the future; random, Bayesian and genetic search on one budgeted loop; an LLM proposer with rationales; every try a ledger trial; Mining Lab; calibrated at mining scale, mined trials count twice in N (thresholds v5, decision 0011). |
-| M8, M9 | Go-live gate, intraday | See ROADMAP §6, §6b and §7. |
+| Ops | Always-on server | **Built and tested** (decision 0012): systemd units and New York timers, bootstrap and deploy scripts run end to end against an Ubuntu 24.04 ARM container, Telegram bot, heartbeat, snapshots. Waits for the owner's server (`docs/DEPLOY.md`). |
+| M8 | Go-live gate | **Done** (tag `m8`). The checklist computed from evidence per entry, the signed plan, Go-Live Gate page, `qlab golive`, `/golive`. No live order path, by decision 0013. |
+| M5b | Follow the informed | **Done** (tag `m5b`), verdict pending. SEC Form 4 pipeline, `insider_timing`, pre-registered SPY/IWM test. The SEC download needs `QLAB_SEC_USER_AGENT` from the owner (decision 0014). |
+| M9 | Intraday mode | **Done** (tag `m9`). Hourly BTC/ETH library (`intraday_momentum`, `range_breakout`, volatility selector), hourly calibration, pre-registered verdicts, Intraday Cockpit (decision 0015). |
+
+## 4b. What the 2026-10-22 session delivered (read this first)
+
+**Two live defects fixed** (both found in the first week of broker paper trading):
+
+- Yahoo's full-history query lagged the close by hours on 2 of 4 nights, so the book decided nothing those nights.
+  `yahoo.fetch` now tops up from a five-day query on the history's dividend basis. `qlab paper nightly
+  --wait-minutes N` re-ingests until the latest session is stored. The missed 2026-10-21 decision was still
+  recorded in time, at 07:20 UTC on 2026-10-22, with 11 `opg` orders sent.
+- Alpaca's paper engine part-fills `opg` orders and the remainder expires: 10 of 15 orders on 2026-10-21. `qlab
+  broker catchup` (09:50 New York) sends each remainder once as a day order. The Mac's morning task now runs it.
+
+**The server** (decision 0012, `docs/DEPLOY.md`):
+
+- Scheduled work is plain commands, not Claude sessions: `qlab mine nightly`, the rotation from the old task's
+  instructions, and `qlab broker catchup`.
+- Every job goes through the API (`inbox run`, `catchup` and `backup` gained API modes).
+- `qlab backup` snapshots through `COPY FROM DATABASE`.
+- `qlab heartbeat` pings `QLAB_HEALTHCHECK_URL`. `qlab alerts send` is systemd's `OnFailure` hook.
+- `qlab bot run` is the Telegram bot; `qlab bot setup` connects it with the token typed hidden; `qlab config NAME
+  [VALUE]` writes `lab.env` with mode 600.
+- `ops/server/bootstrap.sh` and `deploy.sh`: the test against a container caught a code copy that could replace
+  the data folder with a link (exclude `/data`, not `/data/`).
+- Measured on 4 cores and 4 GB: API 500 MB, a mining night 31 s, the nightly job 51 s, snapshot 9 s.
+
+**The move, when the owner has a server:**
+
+1. Bootstrap, then `make deploy-first HOST=…`.
+2. Disable the Mac's scheduled tasks `quantlab-paper-nightly`, `quantlab-morning-fills`, `quantlab-mining-nightly`
+   and `quantlab-inbox-weekly`. Do this right after a successful `deploy-first`, never before.
+3. On the server, check `systemctl list-timers 'qlab-*'` and `/status` from Telegram.
+
+**M8 go-live gate** (decision 0013):
+
+- `qlab.golive` computes 14 items per active paper-book entry.
+- `golive_plans` holds the owner's signed plan (signed with the name in `QLAB_OWNER_NAME`, default discoenmarte).
+- Both entries meet 2 of 14 items today; the earliest the paper-time item can pass is 2027-01-13.
+- **The safety classifier stopped the session when it began a live-money client.** Building the live path needs the
+  owner's explicit approval and a review. Decision 0013 is its specification.
+
+**M5b** (decision 0014):
+
+- `qlab.informed.insiders` (SEC Form 345 data sets) and `insider_timing`.
+- `Strategy.starts` lets the gauntlet leave out years before a rule's inputs exist.
+- Pre-registered in `docs/preregistration/2026-10-22-m5b-insider-timing.md`.
+- **To finish:** the owner sets `QLAB_SEC_USER_AGENT` (the SEC refuses requests without a contact address, and
+  blocked this machine for a while after the first tries). Then run `qlab informed ingest` and the two runs in the
+  pre-registration, and append the results there.
+
+**M9** (decision 0015):
+
+- `qlab.intraday`: `rules`, `synthetic` (hourly markets with an intraday volatility profile) and `cockpit`.
+- Calibration with `qlab calibrate --hourly-reps N` (families `hourly/<rule>`).
+- Pre-registered in `docs/preregistration/2026-10-22-m9-intraday-crypto.md`.
+- **Calibration:** noise 0 of 400 (`343740d3`). Power 0% even at planted edge 3 (`97659722`, `d291f58f`), all at
+  plateau: the cost cliff of a 28 bps daily round trip.
+- **Verdicts:** all four rejected at costs (cards `1d96192f4757`, `73f9b8cc72a8`, `20be29a793c1`, `a87d2f7e3244`).
+  The only lead is the ETH range breakout: gross edge 1.24, p = 0.004, costs break even at 12 bps against 14.
+
+**Guides for the owner:** the [Quant Lab Map](https://claude.ai/artifact/SNmZ3wUF4C369UiZ4L9n7K) (diagrams) and the
+[Quant Lab Field Guide](https://claude.ai/artifact/DmCQomR1X7xHXyZXLswY7M) (glossary and routines). Update them
+(republish) when the architecture changes.
 
 ## 5. What M1 and M2 delivered (facts worth knowing)
 
@@ -663,6 +736,13 @@ and planted markets with each paradigm for 1,000 trials (500 on crypto) and subm
   - **Rules by kind:** cross-sectional rules (`kind="dynamic"`) are refused on static ETF universes and static
     rules on the crypto universes (`runner.check_fit`).
 
+- Server:
+  - `rsync` on macOS is openrsync: no `--info=progress2`; use `--stats`.
+  - Timestamps of stored series may be microseconds: use `.as_unit("ns")` before `asi8` arithmetic.
+  - The SEC answers 403 with "Request Rate Threshold Exceeded" for a while after requests without a contact
+    address.
+  - Calibration of intraday rules records about 440 runs' grids under `calib:` questions; the hourly study took
+    minutes on 14 processes.
 - Mining:
   - **Mining taxes its scope.** Every mined trial counts in the Deflated Sharpe of everything later tested on that
     instrument or universe, twice from thresholds v5. Budgets (default 2,000 per mining question) cap it; raise one

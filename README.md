@@ -47,6 +47,17 @@ with the local model, and drafts specs for the best from their full text. You ap
 reason; approved ones are replicated against the paper's claim, tested after publication, and can go to the
 gauntlet. A digest of the week goes out through the alert channels.
 
+Running it around the clock: the lab moves to a small server (about €8 a month) with plain systemd timers, a
+Telegram bot you can talk to (`/status`, `/pnl`, `/golive`, `/pause`, `/kill`), a heartbeat to an outside
+dead-man's switch and daily snapshots. Step by step, with what you need to do: [docs/DEPLOY.md](docs/DEPLOY.md).
+Plain-language guides: the [Quant Lab Map](https://claude.ai/artifact/SNmZ3wUF4C369UiZ4L9n7K) (how the parts fit
+together) and the [Quant Lab Field Guide](https://claude.ai/artifact/DmCQomR1X7xHXyZXLswY7M) (glossary and routines).
+
+Go-live gate: `uv run qlab golive` (or the Go-Live Gate page, or `/golive`) shows, for every paper-book entry, the
+roadmap's checklist computed from evidence and the earliest date the rest could turn green. There is no real-money
+order path; it gets built only once an entry's checklist is all green, with the owner's approval
+([decision 0013](docs/decisions/0013-go-live-gate.md)).
+
 Daily report: the nightly job ends with a report of what the lab tested, what passed, what is in the paper book and
 how it is doing, and whether the data is fresh. Read it on the Strategy Board, or build one now with `make report`.
 Alerts (a new candidate, a decay alarm, stale data, a failed nightly job) go to `data/alerts/alerts.jsonl` and macOS
@@ -65,6 +76,7 @@ flowchart LR
     S2[Stooq / Yahoo ETFs]
     S3[Ken French factors]
     S4[arXiv q-fin]
+    S5[SEC Form 4]
   end
   subgraph Lab["qlab (Python)"]
     D[data<br/>ingest · validate · store]
@@ -72,6 +84,8 @@ flowchart LR
     G[gauntlet<br/>10 stages · calibration]
     I[inbox<br/>papers → specs, local LLM]
     M[mining<br/>budgeted search]
+    C[informed<br/>insider signal]
+    H[intraday<br/>hourly library]
     L[(ledger + audit<br/>DuckDB)]
     P[(Parquet<br/>curated series)]
   end
@@ -79,12 +93,16 @@ flowchart LR
   WEB[Web app<br/>React · ECharts · Lightweight Charts]
   S1 & S2 & S3 --> D --> P --> B --> G
   S4 --> I --> B
+  S5 --> C --> B
   M --> B
+  H --> B
   B --> L
   G --> L
   L --> API
   P --> API
   API --> WEB
+  API --> BOT[Telegram bot]
+  API --> GATE[Go-live gate<br/>evidence checklist]
 ```
 
 ### Layers and their contracts
@@ -100,7 +118,11 @@ flowchart LR
 | Registry, report, alerts | `qlab.registry`, `qlab.report`, `qlab.alerts` | A card's lifecycle state is derived from its verdict, the paper book and retirements, never stored. The daily report reads what the lab recorded and runs no backtest. Alerts fire on changes between two reports. |
 | Inbox | `qlab.inbox` | arXiv papers scored on a seven-point rubric and mapped onto the lab's existing templates by a local model (paper text is untrusted data, and nothing the model writes is run). The owner reviews; replication and post-publication runs are ledger trials. |
 | Mining | `qlab.mining` | Budgeted search over a grammar of signals, filters, exits, sessions and sizing, compiled only by the lab (formulas can't read the future). Every candidate is a ledger trial on `mined:<scope>:1d`, mined trials count twice in the Deflated Sharpe's N, and the best goes to the unchanged gauntlet. |
-| API | `qlab.api` | Thin HTTP layer, no business logic. The web app, the CLI and (later) a Telegram bot all use it. |
+| Informed | `qlab.informed` | Pipeline C: the SEC's Form 4 data sets as a daily series of insider buying and selling by filing date, used one day later; the aggregate insider timing rule ([decision 0014](docs/decisions/0014-follow-the-informed.md)). |
+| Intraday | `qlab.intraday` | Rules that enter and leave within one UTC day on hourly crypto bars, a volatility selector as a parameter, synthetic hourly markets for calibration ([decision 0015](docs/decisions/0015-intraday-mode.md)). |
+| Go-live gate | `qlab.golive` | The roadmap's checklist computed per paper-book entry from the card, the lockbox log, the paper book, the broker sleeve and the owner's signed plan. Read-only; no live order path ([decision 0013](docs/decisions/0013-go-live-gate.md)). |
+| Operations | `qlab.ops`, `qlab.bot`, `ops/server` | Snapshots taken by the database's own writer, a heartbeat for an outside dead-man's switch, the Telegram bot (reads and risk reduction only), systemd units and timers, bootstrap and deploy scripts ([decision 0012](docs/decisions/0012-always-on-server.md)). |
+| API | `qlab.api` | Thin HTTP layer, no business logic. The web app, the CLI, the scheduled jobs and the Telegram bot all use it. |
 | Web | `web/` | Static React app that reads the API only. Every page belongs to a milestone. |
 
 ### Principles
@@ -141,8 +163,10 @@ flowchart LR
 | M6 | Registry and alerts | Lifecycle states for every card and a strict near-miss rule (only the luck stages failed, p ≤ 0.10, PSR ≥ 0.80), a daily lab report from the ledger, cards, paper book, audit log and data freshness, four alert rules through a file, macOS and Telegram, the report at the end of the nightly job, Strategy Board ([decision 0008](docs/decisions/0008-registry-report-alerts.md)) | done |
 | M7a | Forward paper book | Daily targets recorded before the next bar exists, scored with the backtest engines against frozen research bands, a CUSUM decay alarm, a nightly job, Trading Desk ([decision 0007](docs/decisions/0007-forward-paper-book.md)) | done |
 | M7b | Broker paper trading | Paper-only Alpaca and Binance testnet adapters, sleeves sized from raw prices, opening-auction orders, limits outside the strategy, a kill switch on every page, reconciliation and slippage against the model ([decision 0009](docs/decisions/0009-broker-paper-trading.md)) | done |
-| M8 | Go-live gate | Evidence checklist, limits outside any model | planned |
-| M9 | Intraday mode | Validated intraday library, morning selector, replay | planned |
+| M5b | Follow the informed | Pipeline C1: the SEC's Form 4 data sets as a daily insider series, the aggregate insider timing rule, a pre-registered test on SPY and IWM; C2 and C3 left out with reasons ([decision 0014](docs/decisions/0014-follow-the-informed.md)) | done (verdict waits for the SEC data) |
+| M8 | Go-live gate | The roadmap's 14-item checklist computed from evidence per entry, the owner's signed plan, Go-Live Gate page, `qlab golive` and `/golive`; no live order path until an entry is all green ([decision 0013](docs/decisions/0013-go-live-gate.md)) | done |
+| M9 | Intraday mode | An intraday library on free hourly BTC/ETH bars (momentum, opening-range breakout) with a volatility selector, calibrated on synthetic hourly markets, pre-registered verdicts, Intraday Cockpit ([decision 0015](docs/decisions/0015-intraday-mode.md)) | done |
+| Ops | Always-on server | Hetzner CAX11, systemd timers in New York time, one database writer, Telegram bot with a two-step kill, heartbeat to healthchecks.io, daily snapshots, bootstrap and deploy scripts tested on Ubuntu 24.04 ([decision 0012](docs/decisions/0012-always-on-server.md), [docs/DEPLOY.md](docs/DEPLOY.md)) | done (waiting for the server) |
 
 The full plan, with each milestone's screens, costs and the research it rests on, is in
 [ROADMAP.md](ROADMAP.md). What to build next, what it costs and what it can earn: [docs/SCALING.md](docs/SCALING.md). Implementation state and next steps are in [docs/HANDOFF.md](docs/HANDOFF.md).
@@ -150,14 +174,17 @@ The full plan, with each milestone's screens, costs and the research it rests on
 ## Repository layout
 
 ```
-src/qlab/          Python package (data, backtest, portfolio, gauntlet, paper, registry, report, alerts, api, ledger,
-                   lockbox, audit)
+src/qlab/          Python package (data, backtest, portfolio, gauntlet, paper, registry, report, alerts, inbox, mining,
+                   informed, intraday, golive, bot, ops, api, ledger, lockbox, audit)
 tests/             pytest suite; each test gets its own data folder
 web/               React app (Vite + TypeScript)
 docs/STYLE.md      docstring and commit conventions
 docs/decisions/    architecture decision records
 docs/HANDOFF.md    implementation status and how to continue
-ops/launchd/       template for the nightly job (paper book and daily report; rendered and printed, never installed)
+docs/DEPLOY.md     putting the lab on a server, step by step
+docs/preregistration/  tests written down and committed before they run
+ops/server/        bootstrap and deploy scripts, systemd services and timers
+ops/launchd/       template for the nightly job on a Mac (rendered and printed, never installed)
 data/              local data lake and database (not committed)
 ```
 
@@ -172,3 +199,9 @@ data/              local data lake and database (not committed)
 7. [The forward paper book: decisions before outcomes, frozen expectations, honest power](docs/decisions/0007-forward-paper-book.md)
 8. [The registry, the daily report and alerts: derived states, a strict near-miss rule, alerts on changes](docs/decisions/0008-registry-report-alerts.md)
 9. [Broker paper trading: paper-only by construction, limits outside the strategy, friction only on adding risk](docs/decisions/0009-broker-paper-trading.md)
+10. [The research inbox](docs/decisions/0010-research-inbox.md)
+11. [Strategy mining and its calibration at mining scale](docs/decisions/0011-strategy-mining.md)
+12. [The lab on a small always-on server: plain timers, one database writer, two watchdogs](docs/decisions/0012-always-on-server.md)
+13. [The go-live gate: a checklist computed from evidence, and no live order path until it is green](docs/decisions/0013-go-live-gate.md)
+14. [Follow the informed: aggregate insider buying only, as a market-timing rule](docs/decisions/0014-follow-the-informed.md)
+15. [Intraday mode on free hourly crypto bars](docs/decisions/0015-intraday-mode.md)
